@@ -29,19 +29,37 @@
  */
 
 `timescale 1ns / 1ps
+`include "../rtl/config.vh"
 
 // clock and reset logic
 
 module darksimv;
 
-    reg CLK = 1;
+    reg CLK = 0;
     
-    reg [3:0] RES = -1;
+    reg RES = 1;
 
-    initial while(1) #(500e3/75e3) CLK = !CLK; // clock speed of 80MHz
+    initial while(1) #(500e6/`BOARD_CK) CLK = !CLK; // clock generator w/ freq defined by config.vh
 
-    always@(posedge CLK) RES <= RES ? RES-1 : 0;
+    initial
+    begin
+        $display("reset (startup)");
+        #1e3    RES = 0;            // wait 1us in reset state
+        //#1000e3 RES = 1;            // run  1ms
+        //$display("reset (restart)");
+        //#1e3    RES = 0;            // wait 1us in reset state
+        //#1000e3 $finish();          // run  1ms
+    end
 
-    darksocv darksocv(CLK,|RES);
+    wire TX;
+    wire RX = 1;
+
+    darksocv darksocv
+    (
+        .XCLK(CLK),
+        .XRES(|RES),
+        .UART_RXD(RX),
+        .UART_TXD(TX)
+    );
 
 endmodule

@@ -28,19 +28,45 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-void _start(void)
-{
-  /* 
-   * put the data and bss initialization here:
-   * 
-   * memcpy(&data_rom, &data_ram,data_len);
-   * memset(&bss_ram,0,bss_len);
-   *
-   * you need ensure the boot.o(.text) is the first block in the rom!
-   *
-   */
-     
-  main();
+#include <io.h>
+#include <stdio.h>
 
-  while(1);  
+extern int banner(void);
+extern int main  (void);
+
+void boot(void)
+{
+    int tmp = 1&threads++;
+
+    io.irq = IRQ_TIMR; // clear interrupt
+
+    // thread #0
+
+    if(tmp==0)
+    {    
+        while(1)
+        {
+            banner();
+
+            printf("boot0: text@%d data@%d stack@%d\n",
+                (unsigned int)boot,
+                (unsigned int)&utimers,
+                (unsigned int)&tmp+16);
+        
+            main();
+        }
+    }
+
+    // thread #1
+
+    while(1)
+    {
+        if(!utimers--)
+        {
+            io.led++;
+            utimers=999999;
+        }
+        
+        io.irq  = IRQ_TIMR;  // clear interrupts and switch context
+    }
 }
