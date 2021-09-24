@@ -63,10 +63,18 @@ module darksocv
     
     // useful script to calculate MUL/DIV values:
     // 
-    // awk 'BEGIN { for(m=2;m<=32;m++) for(d=1;d<=32;d++) print 66.666*m/d,m,d }' | sort -n
+    // awk 'BEGIN { 
+    //   ref=66.6; target=97.4; 
+    //   for(m=2;m<=32;m++) for(d=1;d<=32;d++) { 
+    //     mul=ref*m; delta=target-(mul/d); 
+    //     if(mul>=600&&mul<=1600) print (delta<0?-delta:delta),mul/d,mul,m,d;
+    //   } 
+    // }' | sort -nr
     // 
-    // example: reference w/ 66MHz, m=19, d=13 and fx=97.4MHz. not so useful after I discovered 
-    // that my evaluation board already has external clock generator :D
+    // example: reference w/ 66MHz, m=19, d=13 and fx=97.4MHz; 
+    // not so useful after I discovered that my evaluation board already has an external clock generator :D
+    // 
+    // important remark: the xilinx-7 pll requires a ref*mul bandwidth between 0.6 and 1.6GHz!
 
     `ifdef XILINX7CLK
     
@@ -290,8 +298,11 @@ module darksocv
 
     always@(posedge CLK)
     begin
+    `ifdef __HARVARD__
         ROMFF <= ROM[IADDR[11:2]];
-
+    `else
+        ROMFF <= MEM[IADDR[12:2]];
+    `endif
         if(IFFX2)
         begin
             IFFX2 <= 0;
@@ -400,7 +411,11 @@ module darksocv
 
     always@(posedge CLK)
     begin
+    `ifdef __HARVARD__
         RAMFF <= RAM[DADDR[11:2]];
+    `else
+        RAMFF <= MEM[DADDR[12:2]];
+    `endif
 
         if(FFX2)
         begin
@@ -413,24 +428,23 @@ module darksocv
         if(!WHIT)
         begin
             //individual byte/word/long selection, thanks to HYF!
+        `ifdef __HARVARD__
             if(BE[0]) RAM[DADDR[11:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
             if(BE[1]) RAM[DADDR[11:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
             if(BE[2]) RAM[DADDR[11:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
             if(BE[3]) RAM[DADDR[11:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];        
-
+        `else
+            if(BE[0]) MEM[DADDR[12:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
+            if(BE[1]) MEM[DADDR[12:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
+            if(BE[2]) MEM[DADDR[12:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
+            if(BE[3]) MEM[DADDR[12:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];                
+        `endif
             DCACHE[DPTR][0 * 8 + 7: 0 * 8] <= BE[0] ? DATAO[0 * 8 + 7: 0 * 8] : RAMFF[0 * 8 + 7: 0 * 8];
             DCACHE[DPTR][1 * 8 + 7: 1 * 8] <= BE[1] ? DATAO[1 * 8 + 7: 1 * 8] : RAMFF[1 * 8 + 7: 1 * 8];
             DCACHE[DPTR][2 * 8 + 7: 2 * 8] <= BE[2] ? DATAO[2 * 8 + 7: 2 * 8] : RAMFF[2 * 8 + 7: 2 * 8];
             DCACHE[DPTR][3 * 8 + 7: 3 * 8] <= BE[3] ? DATAO[3 * 8 + 7: 3 * 8] : RAMFF[3 * 8 + 7: 3 * 8];
 
             DCACHE[DPTR][55:32] <= DADDR[31:8];
-            
-            //DCACHE[DPTR] <= { DADDR[31:8],
-            //                        BE[3] ? DATAO[3 * 8 + 7: 3 * 8] : RAMFF[3 * 8 + 7: 3 * 8],
-            //                        BE[2] ? DATAO[2 * 8 + 7: 2 * 8] : RAMFF[2 * 8 + 7: 2 * 8],
-            //                        BE[1] ? DATAO[1 * 8 + 7: 1 * 8] : RAMFF[1 * 8 + 7: 1 * 8],
-            //                        BE[0] ? DATAO[0 * 8 + 7: 0 * 8] : RAMFF[0 * 8 + 7: 0 * 8]
-            //                };
 
             DTAG[DPTR]   <= FFX; // cached!
             WTAG         <= FFX;
@@ -510,11 +524,19 @@ module darksocv
     reg [1:0] DACK = 0;
     
     wire WHIT = 1;
-    wire DHIT = !((RD||WR) && DACK!=1); // the WR operatio does not need ws. in this config.
+    wire DHIT = !((RD
+            `ifdef __RMW_CYCLE__
+                    ||WR		// worst code ever! but it is 3:12am...
+            `endif
+                    ) && DACK!=1); // the WR operatio does not need ws. in this config.
     
     always@(posedge CLK) // stage #1.0
     begin
-        DACK <= RES ? 0 : DACK ? DACK-1 : (RD||WR) ? 1 : 0; // wait-states
+        DACK <= RES ? 0 : DACK ? DACK-1 : (RD
+            `ifdef __RMW_CYCLE__
+                    ||WR		// 2nd worst code ever!
+            `endif
+                    ) ? 1 : 0; // wait-states
     end
 
 `else
@@ -537,14 +559,15 @@ module darksocv
 
     //assign DATAI = DADDR[31] ? IOMUX  : RAM[DADDR[11:2]];
     
-    reg [31:0] IOMUXFF;
+    reg [31:0] IOMUXFF = 0;
+    reg [31:0] XADDR   = 0;
 
     //individual byte/word/long selection, thanks to HYF!
     
     always@(posedge CLK)
     begin    
 
-`ifdef __3STAGE__
+`ifdef __RMW_CYCLE__
 
         // read-modify-write operation w/ 1 wait-state:
 
@@ -566,23 +589,25 @@ module darksocv
 `else
         // write-only operation w/ 0 wait-states:
     `ifdef __HARVARD__
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[3]) RAM[DADDR[11:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[2]) RAM[DADDR[11:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[1]) RAM[DADDR[11:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[0]) RAM[DADDR[11:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[3]) RAM[DADDR[11:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[2]) RAM[DADDR[11:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[1]) RAM[DADDR[11:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[0]) RAM[DADDR[11:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
     `else
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[3]) MEM[DADDR[12:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[2]) MEM[DADDR[12:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[1]) MEM[DADDR[12:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
-        if(WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[0]) MEM[DADDR[12:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[3]) MEM[DADDR[12:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[2]) MEM[DADDR[12:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[1]) MEM[DADDR[12:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
+        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[12]==1&&*/BE[0]) MEM[DADDR[12:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
     `endif
 `endif
 
+        XADDR <= DADDR; // 1 clock delayed
         IOMUXFF <= IOMUX[DADDR[3:2]]; // read w/ 2 wait-states
     end    
 
     //assign DATAI = DADDR[31] ? IOMUX[DADDR[3:2]]  : RAMFF;
-    assign DATAI = DADDR[31] ? /*IOMUX[DADDR[3:2]]*/ IOMUXFF  : RAMFF;
+    //assign DATAI = DADDR[31] ? IOMUXFF : RAMFF;
+    assign DATAI = XADDR[31] ? IOMUX[XADDR[3:2]] : RAMFF;
 
 `endif
 
@@ -687,12 +712,19 @@ module darksocv
       //.IRQ(BOARD_IRQ[1]),
       .RXD(UART_RXD),
       .TXD(UART_TXD),
+`ifdef SIMULATION
+      .FINISH_REQ(FINISH_REQ),
+`endif            
       .DEBUG(UDEBUG)
     );
 
     // darkriscv
 
     wire [3:0] KDEBUG;
+
+`ifdef __THREADS__
+    wire [`__THREADS__-1:0] TPTR;
+`endif    
 
     darkriscv
 //    #(
@@ -703,13 +735,15 @@ module darksocv
     (
 `ifdef __3STAGE__
         .CLK(CLK),
+`elsif  __WAITSTATES__
+        .CLK(CLK),
 `else
         .CLK(!CLK),
 `endif
         .RES(RES),
         .HLT(HLT),
-`ifdef __THREADING__        
-        .IREQ(|(IREQ^IACK)),
+`ifdef __THREADS__        
+        .TPTR(TPTR),
 `endif        
         .IDATA(IDATA),
         .IADDR(IADDR),
@@ -728,19 +762,96 @@ module darksocv
         .RD(RD),
 `endif
 
+        .IDLE(IDLE),
+
         .DEBUG(KDEBUG)
     );
-
-`ifdef __ICARUS__
-  initial
-  begin
-    $dumpfile("darksocv.vcd");
-    $dumpvars();
-  end
-`endif
 
     assign LED   = LEDFF[3:0];
     
     assign DEBUG = { GPIOFF[0], XTIMER, WR, RD }; // UDEBUG;
+
+`ifdef SIMULATION
+
+    `ifdef __PERFMETER__
+
+        integer clocks=0, running=0, load=0, store=0, flush=0, halt=0;
+
+    `ifdef __THREADS__
+        integer thread[0:(2**`__THREADS__)-1],curtptr=0,cnttptr=0;
+        integer j;
+        
+        initial for(j=0;j!=(2**`__THREADS__);j=j+1) thread[j] = 0;
+    `endif
+    
+        always@(posedge CLK)
+        begin
+            if(!RES)
+            begin
+                clocks = clocks+1;
+
+                if(HLT)
+                begin
+                         if(WR)	store = store+1;
+                    else if(RD)	load  = load +1;
+                    else 		halt  = halt +1;            
+                end
+                else
+                if(IDLE)
+                begin
+                    flush=flush+1;
+                end
+                else
+                begin
+                    
+        `ifdef __THREADS__
+                    for(j=0;j!=(2**`__THREADS__);j=j+1)
+                            thread[j] = thread[j]+(j==TPTR?1:0);
+                            
+                    if(TPTR!=curtptr)
+                    begin
+                        curtptr = TPTR;
+                        cnttptr = cnttptr+1;
+                    end
+        `endif    
+                    running = running +1;
+                end
+                    
+                if(FINISH_REQ)
+                begin
+                    $display("****************************************************************************");
+                    $display("DarkRISCV Pipeline Report (%0d clocks):",clocks);
+
+                    $display("core0: %0d%% running, %0d%% waiting (%0d%% i-bus, %0d%% d-bus/rd, %0d%% d-bus/wr), %0d%% idle",
+                        100.0*running/clocks,
+                        100.0*(load+store+halt)/clocks,
+                        100.0*halt/clocks,
+                        100.0*load/clocks,
+                        100.0*store/clocks,
+                        100.0*flush/clocks);
+
+         `ifdef __THREADS__
+                    for(j=0;j!=(2**`__THREADS__);j=j+1) $display("  thread%0d: %0d%% running",j,100.0*thread[j]/clocks);
+                    
+                    $display("%0d thread switches, %0d clocks/threads",cnttptr,clocks/cnttptr);
+         `endif
+                    $display("****************************************************************************");                    
+                    $finish();
+                end
+            end
+        end
+    `else
+        always@(posedge CLK) if(FINISH_REQ) $finish();
+    `endif
+    
+    `ifdef __ICARUS__
+      initial
+      begin
+        $dumpfile("darksocv.vcd");
+        $dumpvars();
+      end
+    `endif
+
+`endif
 
 endmodule

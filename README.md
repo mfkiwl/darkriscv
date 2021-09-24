@@ -1,9 +1,12 @@
 # DarkRISCV
 Opensource RISC-V implemented from scratch in one night!
 
+![darkriscv](https://user-images.githubusercontent.com/42520878/109411184-01075f80-797f-11eb-8932-5b916133561a.jpg)
+
 ## Table of Contents
 
 - [Introduction](#introduction)
+- [History](#history)
 - [Project Background](#project-background)
 - [Directory Description](#directory-description)
 - ["src" Directory](#src-directory)
@@ -14,6 +17,8 @@ Opensource RISC-V implemented from scratch in one night!
 - [Development Tools](#development-tools)
 - [Development Boards](#development-boards)
 - [Creating a RISCV from scratch](#creating-a-riscv-from-scratch)
+- [Academic Papers and Applications](#academic-papers-and-applications)
+- [Performance Comparisons](#performance-comparisons)
 - [Acknowledgments](#acknowledgments)
 - [References](#references)
 
@@ -22,6 +27,48 @@ Opensource RISC-V implemented from scratch in one night!
 Developed in a magic night of 19 Aug, 2018 between 2am and 8am, the
 *DarkRISCV* softcore started as an proof of concept for the opensource
 RISC-V instruction set.  
+
+Although the code is small and crude when compared with other RISC-V
+implementations, the *DarkRISCV* has lots of impressive features:
+
+- implements most of the RISC-V RV32E instruction set
+- implements most of the RISC-V RV32I instruction set (missing csr*, e* and fence*)
+- works up to 250MHz in a ultrascale ku040 (400MHz w/ overclock!)
+- up to 100MHz in a cheap spartan-6, fits in small spartan-3E such as XC3S100E!
+- can sustain 1 clock per instruction most of time (typically 71% of time)
+- flexible harvard architecture (easy to integrate a cache controller, bus bridges, etc)
+- works fine in a real xilinx (spartan-3, spartan-6, spartan-7, artix-7, kintex-7 and kintex ultrascale)
+- works fine with some real altera and lattice FPGAs
+- works fine with gcc 9.0.0 for RISC-V (no patches required!)
+- uses between 850-1500LUTs (core only with LUT6 technology, depending of enabled features and optimizations)
+- optional RV32E support (works better with LUT4 FPGAs)
+- optional 16x16-bit MAC instruction (for digital signal processing) 
+- optional coarse-grained multi-threading (MT)
+- no interlock between pipeline stages!
+- BSD license: can be used anywhere with no restrictions!
+
+Some extra features are planned for the future or under development:
+
+- interrupt controller (under tests)
+- cache controller (under tests)
+- gpio and timer (under tests)
+- sdram controller w/ data scrambler
+- branch predictor (under tests)
+- ethernet controller (GbE)
+- multi-processing (SMP)
+- network on chip (NoC)
+- rv64i support (not so easy as it appears...)
+- dynamic bus sizing and big-endian support
+- user/supervisor modes
+- debug support
+- misaligned memory access
+- bridge for 8/16/32-bit buses 
+
+And much other features!
+
+Feel free to make suggestions and good hacking! o/
+
+## History
 
 The initial concept was based in my other early 16-bit RISC processors and
 composed by a simplified two stage pipeline, where a instruction is fetch
@@ -40,7 +87,7 @@ nights of work and the help of lots of colleagues, the *DarkRISCV* reached a
 very good quality result, in a way that the code compiled by the standard
 GCC for RV32I worked fine.
 
-Nowadays, after two years of development, a three stage pipeline working
+After two years of development, a three stage pipeline working
 with a single clock phase is also available, resulting in a better
 distribution between the decode and execute stages.  In this case the
 instruction is fetch in the first clock from a blockram, decoded in the
@@ -55,43 +102,9 @@ pipeline version can reach a instruction per clock (IPC) of 0.7, smaller
 than the measured IPC of 0.85 in the case of the 2-stage pipeline version.
 
 Anyway, with the 3-stage pipeline and some other expensive optimizations,
-the *DarkRISCV* can reach 100MHz in a low-cost Spartan-6, which results in
+the *DarkRISCV* can reach up to 100MHz in a low-cost Spartan-6, which results in
 more performance when compared with the 2-stage pipeline version (typically
 50MHz).
-
-Although the code is small and crude when compared with other RISC-V
-implementations, the *DarkRISCV* has lots of impressive features:
-
-- implements most of the RISC-V RV32I instruction set (missing csr*, e* and fence*)
-- works up to 100MHz (spartan-6) and sustain 1 clock per instruction most of time
-- flexible harvard architecture (easy to integrate a cache controller)
-- works fine in a real xilinx and lattice FPGAs
-- works fine with gcc 9.0.0 for RISC-V (no patches required!)
-- uses between 1000-1500LUTs, depending of enabled features (Xilinx LUT6)
-- optional RV32E support (works better with LUT4 FPGAs)
-- optional 16x16-bit MAC instruction (for signal processing) 
-- optional coarse-grained multi-threading (MT)
-- no interlock between pipeline stages 
-- BSD license: can be used anywhere with no restrictions!
-
-Some extra features are planned for the furure or under development:
-
-- interrupt controller (under tests)
-- cache controller (under tests)
-- gpio and timer (under tests)
-- sdram controller w/ data scrambler
-- branch predictor (under tests)
-- ethernet controller (GbE)
-- multi-processing (SMP)
-- network on chip (NoC)
-- rv64i support (not so easy as appears...)
-- dynamic bus size and big-endian support
-- user/supervisor modes
-- debug support
-
-And much other features!
-
-Feel free to make suggestions and good hacking! o/
 
 ## Project Background
 
@@ -165,16 +178,25 @@ git clone https://github.com/darklife/darkriscv.git
 
 Pre Setup Guide for MacOS:
 
-The document encompasses all the dependencies and steps to install those dependencies to successfully utilize the Darriscv ecosystem on MacOS.
+The document encompasses all the dependencies and steps to install those
+dependencies to successfully utilize the Darriscv ecosystem on MacOS.
 
-Essentially, the ecosystem cannot be utilized in MacOS because of on of the dependencies Xilinx ISE 14.7 Design suit, which currently do not support MacOS. 
+Essentially, the ecosystem cannot be utilized in MacOS because of on of the
+dependencies Xilinx ISE 14.7 Design suit, which currently do not support
+MacOS.
 
-In order to overcome this issue, we need to install Linux/Windows on MacOS by using below two methods:
+In order to overcome this issue, we need to install Linux/Windows on MacOS
+by using below two methods:
 
-a) WineSkin, which is a kind of Windows emulator that runs the Windows application natively but intercepts and emulate the Windows calls to map directly in the macOS.
-b) VirtualBox (or VMware, Parallels, etc) in order to run a complete Windows OS or Linux, which appears to be far better than the WineSkin option.
+a) WineSkin, which is a kind of Windows emulator that runs the Windows
+application natively but intercepts and emulate the Windows calls to map
+directly in the macOS.  
 
-I used the second method and installed VMware Fusion to install Linux Mint. Please find below the links I used to obtain download files.
+b) VirtualBox (or VMware, Parallels, etc) in order to run a complete Windows
+OS or Linux, which appears to be far better than the WineSkin option.
+
+I used the second method and installed VMware Fusion to install Linux Mint. 
+Please find below the links I used to obtain download files.
 
 Dependencies:
 
@@ -189,15 +211,22 @@ d.  FLEX
 
 Icarus Verilog Setup:
 
-The steps have been condensed for linux operating system. Complete steps for all other OS platforms are available on https://iverilog.fandom.com/wiki/Installation_Guide.
+The steps have been condensed for linux operating system.  Complete steps
+for all other OS platforms are available on
+https://iverilog.fandom.com/wiki/Installation_Guide.
 
-Step 1: Download Verilog download tar file from ftp://ftp.icarus.com/pub/eda/verilog/ . Always install the latest version. Verilog-10.3 is the latest version as of now.
+Step 1: Download Verilog download tar file from
+ftp://ftp.icarus.com/pub/eda/verilog/ .  Always install the latest version. 
+Verilog-10.3 is the latest version as of now.
 
 Step 2: Extract the tar file using ‘% tar -zxvf verilog-version.tar.gz’.
 
-Step 3: Go to the Verilog folder using ‘cd Verilog-version’. Here it is cd Verilog-10.3.
+Step 3: Go to the Verilog folder using ‘cd Verilog-version’.  Here it is cd
+Verilog-10.3.
 
-Step 4: Check if you have the following libraries installed: Flex, Bison, g++ and gcc. If not use ‘sudo apt-get install flex bison g++ gcc’ in terminal to install. Restart the system once for effects to change place.
+Step 4: Check if you have the following libraries installed: Flex, Bison,
+g++ and gcc.  If not use ‘sudo apt-get install flex bison g++ gcc’ in
+terminal to install.  Restart the system once for effects to change place.
 
 Step 5: Run the below commands in directory Verilog-10.3
 1.  ./configure
@@ -223,7 +252,8 @@ a.  Sudo apt-get install libncurses5 libncursesw-dev
 2.  For 32 bit architecture
 a.  Sudo apt-get install libncurses5:i386
 
-Once all pre-requisites are installed, go to root directory and run the below code:
+Once all pre-requisites are installed, go to root directory and run the
+below code:
 
 cd darkrisc 
 make (use sudo if required)
@@ -240,12 +270,13 @@ By default, the top level *Makefile* uses:
 	ICARUS = /usr/local/bin/iverilog
 	BOARD  = avnet_microboard_lx9
 	
-Just update the configuration according to your system configuration, 
-type *make* and hope everything is in the correct location! You probably will
-need fix some paths and set some others in the PATH environment variable, but
-it will eventually work.
+Just update the configuration according to your system configuration, type
+*make* and hope everything is in the correct location!  You probably will
+need fix some paths and set some others in the PATH environment variable,
+but it will eventually work.
 
-And, when everything is correctly configured, the result will be something like this:
+And, when everything is correctly configured, the result will be something
+like this:
 
 ```$ 
 # make
@@ -800,9 +831,10 @@ And one number for speed grade 3 devices:
 
 - Kintex-7:	221MHz
 
-Although Vivado is far slow and shows pessimistic numbers for the same FPGAs when 
-compared with ISE, I guess Vivado is more realistic and, at least, it supports the
-new Spartan-7, which shows very good numbers (almost the same as the Artix-7!).
+Although Vivado is far slow and shows pessimistic numbers for the same FPGAs
+when compared with ISE, I guess Vivado is more realistic and, at least, it
+supports the new Spartan-7, which shows very good numbers (almost the same
+as the Artix-7!).
 
 That values are only for reference.  The real values depends of some options
 in the core, such as the number of pipeline stages, who the memories are
@@ -1022,7 +1054,11 @@ design is perfect, instead you will need lots and lots of debug time
 in order to fix all hidden problems.
 
 Just in case, I found a set of online videos from my friend (Lucas Teske)
-that shows the design of a RISC-V processor from scratch:
+that shows the design of a RISC-V processor from scratch (playlist with 9 videos):
+
+- https://www.youtube.com/playlist?list=PLEP_M2UAh9q52a-w3ZUEChEoG_ROeMa88
+
+Alternatively, there are the original videos in the twitch:
 
 - https://www.twitch.tv/videos/840983740 Register bank (4h50)
 - https://www.twitch.tv/videos/845651672 Program counter and ALU (3h49)
@@ -1032,16 +1068,18 @@ that shows the design of a RISC-V processor from scratch:
 - https://www.twitch.tv/videos/852082786 instruction decode and execute - part 2/3 (10h56)
 - https://www.twitch.tv/videos/858055433 instruction decode and execute - part 3/3 - SoC simulation (10h24)
 - TBD tests in the Lattice FPGA
+- TBD tests in the Lattice FPGA w/ LCD display
 
-Unfortunately the video set is currently in portuguese only and there a lot of
-parallel discussions about technology, including the fix of the Teske's notebook
-online! I hope in the future will be possible edit the video set and, maybe, 
-create english subtitles.
+Unfortunately the video set is currently in portuguese only and there a lot
+of parallel discussions about technology, including the fix of the Teske's
+notebook online!  I hope in the future will be possible edit the video set
+and, maybe, create english subtitles.
 
-About the processor itself, it is a microcode oriented concept with a classic 
-von neumann archirecture, designed to support more easily different ISAs. It is really
-very different than the traditional RISC cores that we found around! Also, it includes 
-a very good eco-system around opensource tools, such as Icarus, Yosys and gtkWave!
+About the processor itself, it is a microcode oriented concept with a
+classic von neumann archirecture, designed to support more easily different
+ISAs.  It is really very different than the traditional RISC cores that we
+found around!  Also, it includes a very good eco-system around opensource
+tools, such as Icarus, Yosys and gtkWave!
 
 Although not finished yet (95% done!), I think it is very illustrative about the RISC-V design:
 
@@ -1051,13 +1089,55 @@ Although not finished yet (95% done!), I think it is very illustrative about the
 - rv32e instruction decode: very simple to understand, very direct to implement
 - rv32e software support: the GCC support provides an easy way to generate code and test it!
 
-The Teske's proposal is not design the faster RISC-V core ever (we already have lots 
-of faster cores with CPI ~ 1, such as the darkriscv, vexriscv, etc), but create a clean, 
-reliable and compreensive RISC-V core.
+The Teske's proposal is not design the faster RISC-V core ever (we already
+have lots of faster cores with CPI ~ 1, such as the darkriscv, vexriscv,
+etc), but create a clean, reliable and compreensive RISC-V core.
 
 You can check the code in the following repository:
 
 - https://github.com/racerxdl/riskow
+
+## Academic Papers and Applications
+
+In a funny way, the DarkRISCV appears in some academic papers, sometimes in a comparative way, sometimes as a laboratory mouse.
+
+- Design and Implementation of a 256-Bit RISC-V-Based Dynamically Scheduled Very Long Instruction Word on FPGA -- Here we found an interesting comparison between the DarkRISCV versus a huge 8-way VLIW core, as well the Kronos RISCV, the PicoRV32 and the NEORV32. Nice results for DarkRISCV: 2nd place w/ IPC 0.71 and 1st place with only 1500LUTs. https://ieeexplore.ieee.org/iel7/6287639/8948470/09200617.pdf
+
+- ReCon: From the Bitstream to Piracy Detection -- Interesting paper about IP piracy detection, basically how detect an IP inside an bitstream, they used the PicoRV32, OpenRISC and DarkRISCV as IPs to be detected. https://homes.luddy.indiana.edu/lukefahr/papers/skipper_paine20.pdf
+
+- A Low-Cost Fault-Tolerant RISC-V Processor for Space Systems -- Here we found an interesting comparison between low-cost RISCV cores, but in this case the DarkRISCV performs very badly against the PicoRV32, mRISCV, Ibex and a radiation hardned RISCV core. Not sure about the tools and the target, as long I have no access to the paper, just some pictures. https://www.semanticscholar.org/paper/A-Low-Cost-Fault-Tolerant-RISC-V-Processor-for-Santos-Luza/b8cd0b62ac914678f1999df09a4b77b857178d33 
+
+- Fault Classification and Vulnerability Analysis of Microprocessors -- No much information, since the paper will released only in 2022, but the abstract is very interesting, basically they will inject lots of faults in the PicoRV32 and DarkRISCV in order to see what happens. https://repository.tudelft.nl/islandora/object/uuid:4c85a1ba-2721-4563-bb13-31d506d9c906?collection=education
+
+Regarding real world applications, standard embbeded C code typically runs very well with DarkRISCV. Some examples of applications currently in use:
+
+- microcontroller programmers (JTAG and other complex protocols)
+- data compression/decompression (LZ streams)
+- cryptography (RSA and SHA256, requires hardware accelerators)
+- digital signal processing (requires mac instruction)
+
+In the case of RSA, the simple inclusion of a pipelined 32x32-bit multiplier mapped via IO (i.e. not the M extension, instead an IO mapped register accessible via load/store instructions) increased the RSA performance by a factor of 20x when compared to the bare RV32E instruction set. In the case of SHA256, a complete SHA256 accelerator in hardware and mapped via IO can transfor seconds of processing in few miliseconds. In both cases, no need for complex instruction integration in the core, no need to wait -- the core and the accelerator can work in parallel.
+
+## Performance Comparisons
+
+I tried prepare a fair performance comparison between the DarkRISCV and different FPGAs, but it is not so easy as it appears! The first problem is locate HDL versions of each core, since the tools require verilog or VHDL files in order to build something. The second problem is decide what compile: there are lots of combinations of top level blocks, with different peripherals and concepts. In this case, I included only the core. The third problem regards to the core configuration: it is not easy or clear how to configure them to the minimum area or maximum speed, so I just used the default configuration for all cores. In short words, I solved the problem in a dummy way (which reflects the reality in 95% of time).
+
+As long I have separate builds for each core, there is the final problem: how analyse the results and rank the cores. My option was calculate how many MIPS is possible in a fixed FPGA, in this case the Kintex-7 K420 with 260600 LUTs of 6-inputs. Different cores will require different amount of LUTs, just divide the total number by the required ammount and we have the theorical number of cores per FPGA (peak cores/FPGA). Also, different cores have different theorical peak IPC. guessed numbers and, according to the synthesis tool in the default setup, will run at different maximum frequencies. As long we know the number of instruction per clock and the maximum number of clocks per second (the maximum frequency), we have the maximum number of instructions per second (peak MIPS) per core. As long we also knows about the maximum number of cores, we can calculate the maximum peak MIPS per FPGA.
+
+The following list is far from complete, but it is my suggestion to compare different cores:
+
+	Core		LUT	FF	DSP	BRAM	IPC	MFreq	Ncores	MIPS/k7	REPO
+	DarkRISCV	1177	246	0	0	1	150	221	33232	https://github.com/darklife/darkriscv
+	VexRISCV	1993	1345	4	5	1	214	130	28013	https://github.com/m-labs/VexRiscv-verilog
+	PicoRV32	1291	568	0	1	1/4	309	201	15630	https://github.com/cliffordwolf/picorv32
+	SERV		217	174	0	0	1/32	367	1200	13788	https://github.com/olofk/serv
+	RPU		2943	1103	12	1	1	111	88	9905	https://github.com/Domipheus/RPU
+	UE RISC-V	3676	2289	4	0	1	124	70	8811	https://github.com/ultraembedded/riscv
+	UE BiRISC-V	15667	6324	4	0	2	87	16	2917	https://github.com/ultraembedded/biriscv
+
+Are that results fair enough? from my point of view, as long the conditions are the same, yes. Are that results true enough? from my point of view, maybe. At least two cases does not match: the DarkRISCV reaches up to 240MHz in the same FPGA when the top level is in the build. Not sure why the core only result in smaller maximum frequency, but the point is try to find a way to compare different cores, so it is okay. The second case is the SERV, which shows a maximum frequency of 367MHz and up to 1200 cores/FPGA. In fact, I tested up to 1000 SERV cores in that FPGA and appears to be possivel fit between 1100 and 1200 cores as result of optimizations across the multi-core hierarchy. The bad news is that the maximum clock barely reached 128MHz per core. Again, the point is try to find a way to compare differnt cores, so it is okay.
+
+For sure that numbers will be very useful for future designers and the message is clear: keep it simple! Less area per core means more cores in the same area and, in some cases, means better performance. In most cases, less are also means better clock performance, but in this case the better clock is useful only when the IPC is around 1, which is not so easy to keep. Just as example, the DarkRISCV can trully reach the IPC ~ 1, but the code must be optimized by hand and the top level must be changed in a way that there is no latency regarding the BRAM. In a more general way, with less effort, the compiler and a more standard top level can keep the IPC around 0.7, which is good enough for most applications. So, keep your expectives very, very low! :)
 
 ## Acknowledgments
 
@@ -1071,7 +1151,7 @@ Special thanks to my old colleagues from the Verilog/VHDL/IT area:
 - Fabiano Silos (technology guru)
 
 Also, special thanks to the "friends of darkriscv" that found the project in
-the internet and contributed in any way to make it better: 
+the internet and contributed in any way to make it better:
 
 - Guilherme Barile (technology guru and first guy to post anything about the darkriscv! [2]).
 - Alasdair Allan (technology guru, posted an article about the darkriscv [3]) 

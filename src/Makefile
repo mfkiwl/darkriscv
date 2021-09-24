@@ -26,6 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
 
+SHELL := /bin/bash
+
 ifndef HOST_CC
     HOST_CC = gcc
     HOST_CFLAGS = -Wall -Wno-incompatible-library-redeclaration -I./include -Os
@@ -47,7 +49,7 @@ ifndef CROSS
     
     CCPATH = /usr/local/share/gcc-$(CROSS)/bin/
     #CCPATH = /usr/local/share/toolchain-$(CROSS)/bin
-    HARVARD = 1
+    #HARVARD = 1
 endif
 
 ifndef BUILD
@@ -61,12 +63,12 @@ endif
     OD = $(CCPATH)/$(CROSS)-objdump
    CPP = $(CCPATH)/$(CROSS)-cpp
 
-CCFLAGS = -Wall -fcommon -I./include -Os -march=$(ARCH) -mabi=ilp32e -D__RISCV__ -DBUILD="\"$(BUILD)\"" -DARCH="\"$(ARCH)\""
+CCFLAGS = -Wall -fcommon -ffreestanding -I./include -O2 -march=$(ARCH) -mabi=ilp32e -D__RISCV__ -DBUILD="\"$(BUILD)\"" -DARCH="\"$(ARCH)\""
 ASFLAGS = -march=$(ARCH)
 LDFLAGS = -T$(PROJ).ld -Map=$(PROJ).map -m elf32lriscv # -Ttext=0
 CPFLAGS = -P 
 
-#CCFLAGS += -mcmodel=medany -mexplicit-relocs # relocable clode
+CCFLAGS += -mcmodel=medany -mexplicit-relocs # relocable clode
 
 ifdef HARVARD
 	CPFLAGS +=  -DHARVARD=1
@@ -76,9 +78,9 @@ OCFLAGS = -O binary # --reverse-bytes=4 # workaround for darkriscv big-endian bl
 ODFLAGS = -d
 
 PROJ = darksocv
-OBJS = boot.o stdio.o main.o io.o banner.o
-ASMS = boot.s stdio.s main.s io.s banner.s
-SRCS = boot.c stdio.c main.c io.c banner.c
+OBJS = main.o stdio.o io.o banner.o boot.o
+ASMS = main.s stdio.s io.s banner.s
+SRCS = main.c stdio.c io.c banner.c boot.s
 
 #include app/Makefile.in
 
@@ -93,15 +95,15 @@ endif
 .PHONY: all
 
 all: $(TARGETS) $(DEPS)
-	echo sources ok.
+	@echo sources ok.
 
 clean:
-	-rm *.s *.o $(PROJ).{bin,lst,map,ram,rom,x86,text,data,bin,ld}
+	-rm $(ASMS) $(OBJS) $(PROJ).{bin,lst,map,ram,rom,x86,text,data,bin,ld,o}
 
-%.o: %.s
+%.o: %.s Makefile
 	$(AS) $(ASFLAGS) -c $< -o $@
 
-%.s: %.c
+%.s: %.c Makefile
 	$(CC) $(CCFLAGS) -S $< -o $@
 
 $(PROJ).ld: $(PROJ).ld.src
@@ -117,7 +119,7 @@ $(PROJ).rom.mem: $(PROJ).o
 	#xxd -p -c 4 -g 4 $< > $@
 	rm $(PROJ).text
 	wc -l $@
-	echo rom ok.
+	@echo rom ok.
 
 $(PROJ).ram.mem: $(PROJ).o
 	$(OC) $(OCFLAGS) $< $(PROJ).data --only-section .*data*
@@ -125,7 +127,7 @@ $(PROJ).ram.mem: $(PROJ).o
 	#xxd -p -c 4 -g 4 $< > $@
 	rm $(PROJ).data
 	wc -l $@
-	echo ram ok.
+	@echo ram ok.
 
 $(PROJ).mem: $(PROJ).o
 	$(OC) $(OCFLAGS) $< $(PROJ).bin
@@ -133,8 +135,8 @@ $(PROJ).mem: $(PROJ).o
 	#xxd -p -c 4 -g 4 $< > $@
 	rm $(PROJ).bin
 	wc -l $@
-	echo mem ok.
+	@echo mem ok.
 	
 $(PROJ).x86: $(SRCS)
 	$(HOST_CC) $(HOST_CFLAGS) $(SRCS) -o $(PROJ).x86 -DBUILD="\"$(BUILD)\"" -DARCH="\"x86\""
-	echo x86 ok.
+	@echo x86 ok.

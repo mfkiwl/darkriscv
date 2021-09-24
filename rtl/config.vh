@@ -30,26 +30,10 @@
 
 `timescale 1ns / 1ps
 
-// memory architecture
-//
-// TODO: fix the different memory architecture concepts:
-// status:
-// ICACHE: works without interrupt
-// DCACHE: does not work!
-// WAITSTATE: works
-// 
-//`define __ICACHE__              // instruction cache
-//`define __DCACHE__              // data cache (bug: simulation only)
-//`define __WAITSTATES__          // wait-state tests, no cache
-
-// peripheral configuration
-//
-// UART speed is set in bits per second, typically 115200 bps:
-
-`define __UARTSPEED__ 115200
-
-// darkriscv/darksocv configuration
-// 
+////////////////////////////////////////////////////////////////////////////////
+// darkriscv configuration
+////////////////////////////////////////////////////////////////////////////////
+ 
 // pipeline stages:
 // 
 // 2-stage version: core and memory in different clock edges result in less
@@ -63,29 +47,34 @@
 // stage in the pipeline, but keep a good performance most of time
 // (instruction per clock = 1).  of course, read operations require 1
 // wait-state, which means sometimes the read performance is reduced.
-
 `define __3STAGE__
+
+// RV32I vs RV32E:
+//
+// The difference between the RV32I and RV32E regarding the logic space is 
+// minimal in typical applications with modern 5 or 6 input LUT based FPGAs, 
+// but the RV32E is better with old 4 input LUT based FPGAs.
+`define __RV32E__
 
 // muti-threading support:
 //
-// Decreases clock performance by 10% (90MHz), but enables two contexts
-// (threads) in the core.  They start in the same code, but the "interrupt"
-// handling is locked in a separate loop and the conext switch is always
-// delayed until the next pipeline flush, in order to decrease the
-// performance impact.  Note: threading is currently supported only in the
-// 3-stage pipeline version.
-
-//`define __THREADING__
-
-// performance measurement:
+// Decreases clock performance by 20% (80MHz), but enables two or more 
+// contexts (threads) in the core. The threads work in symmetrical way, 
+// which means that they will start with the same exactly core parameters 
+// (same initial PC, same initial SP, etc). The boot.s code is designed 
+// to handle this difference and set each thread to different 
+// applications.
+// Notes: 
+// a) threading is currently supported only in the 3-stage pipeline version.
+// b) the old experimental "interrupt mode" was removed, which means that
+//    the multi-thread mode does not make anything "visible" other than
+//    increment the gpio register.
+// c) the threading in the non-interrupt mode switches when the program flow
+//    changes, i.e. every jal instruction. When the core is idle, it is 
+//    probably in a jal loop.
+// The number of threads must be 2**n (i.e. THREADS = 3 means 8 threads)
+//`define __THREADS__ 3
 //
-// The performance measurement can be done in the simulation level by
-// eabling the __PERFMETER__ define, in order to check how the clock cycles
-// are used in the core.  The value defines how many clocks are computed
-// before print the result.
-
-//`define __PERFMETER__ 70000
-
 // mac instruction: 
 // 
 // The mac instruction is similar to other register to register
@@ -95,16 +84,19 @@
 // can be used to accelerate the mul/div operations, the mac operation is
 // designed for DSP applications.  with some effort (low level machine
 // code), it is possible peak 100MMAC/s @100MHz.
-
 //`define __MAC16X16__
 
-// RV32I vs RV32E:
+// flexbuzz interface (experimental):
 //
-// The difference between the RV32I and RV32E regarding the logic space is 
-// minimal in typical applications with modern 5 or 6 input LUT based FPGAs, 
-// but the RV32E is better with old 4 input LUT based FPGAs.
-
-`define __RV32E__
+// A new data bus interface similar to a well known c*ldfire bus interface, in 
+// a way that part of the bus routing is moved to the core, in a way that 
+// is possible support different bus widths (8, 16 or 32 bit) and endians more 
+// easily (the new interface is natively big-endian, but the endian can be adjusted
+// in the bus interface dinamically). Similarly to the standard 32-bit interface, 
+// the external logic must detect the RD/WR operation quick enough and assert HLT 
+// in order to insert wait-states and perform the required multiplexing to fit 
+// the DLEN operand size in the data bus width available.
+//`define __FLEXBUZZ__
 
 // initial PC and SP
 //
@@ -115,8 +107,20 @@
 // RAM memory matches with the .data and other volatile data, in a way that
 // the stack can be positioned in the top of RAM and does not match with the
 // .data.
+`define __RESETPC__ 32'd0
+`define __RESETSP__ 32'd8192
 
-`define __HARVARD__
+////////////////////////////////////////////////////////////////////////////////
+// darkocv configuration:
+////////////////////////////////////////////////////////////////////////////////
+
+// performance measurement:
+//
+// The performance measurement can be done in the simulation level by
+// eabling the __PERFMETER__ define, in order to check how the clock cycles
+// are used in the core. The report is displayed when the FINISH_REQ signal
+// is actived by the UART.
+`define __PERFMETER__
 
 // full harvard architecture:
 // 
@@ -131,28 +135,51 @@
 // advantage of a single memory bank is that the .text and .data areas can
 // be better allocated, but in this case is not possible protect the .text
 // area as in the case of separate memory banks.
+//`define __HARVARD__
 
-`define __FLEXBUZZ__
-
-// flexbuzz interface (experimental):
+// read-modify-write cycle:
 //
-// A new data bus interface similar to a well known c*ldfire bus interface, in 
-// a way that part of the bus routing is moved to the core, in a way that 
-// is possible support different bus widths (8, 16 or 32 bit) and endians more 
-// easily (the new interface is natively big-endian, but the endian can be adjusted
-// in the bus interface dinamically). Similarly to the standard 32-bit interface, 
-// the external logic must detect the RD/WR operation quick enough and assert HLT 
-// in order to insert wait-states and perform the required multiplexing to fit 
-// the DLEN operand size in the data bus width available.
+// Generate RMW cycles when writing in the memory. This option basically 
+// makes the read and write cycle symmetric and may work better in the cases
+// when the 32-bit memory does not support separate write enables for 
+// separate 16-bit and 8-bit words. Typically, the RMW cycle results in a
+// decrease of 5% in the performance (not the clock, but the instruction
+// pipeline eficiency) due to memory wait-states.
+//`define __RMW_CYCLE__
 
-`define __RESETPC__ 32'd0
-`define __RESETSP__ 32'd8192
-
-// board definition:
+// instruction wait-states:
 // 
+// option to add wait-states in order to use the 2-stage pipeline AND a 
+// single phase clock... decrease the IPC, but increases the clock from 50 to 80MHz! 
+// maybe, in the future, can use associated to a large 64 or 128 bit burst based 
+// bus in order to get a quick 2-stage pipeline w/ an efficient instruction bus.
+// do not forget to see the cache options below!
+//`define __WAITSTATES__
+
+// instruction and data caches:
+// 
+// the option for instruction and data caches were developed for 2-stage 
+// version and, of course, is part of the original effort to make the core
+// more efficient when the wait-states are enabled.
+//`define __ICACHE__ // not working, must debug it! :(
+//`define __DCACHE__ // not working, must debug it! :(
+
+// UART speed is set in bits per second, typically 115200 bps:
+`define __UARTSPEED__ 115200
+
+// UART queue: 
+// 
+// Optional RX/TX queue for communication oriented applications. The concept
+// foreseen 256 bytes for TX and RX, in a way that frames up to 128 bytes can
+// be easily exchanged via UART.
+//`define __UARTQUEUE__
+
+////////////////////////////////////////////////////////////////////////////////
+// board definition:
+////////////////////////////////////////////////////////////////////////////////
+ 
 // The board is automatically defined in the xst/xise files via Makefile or
 // ISE. Case it is not the case, please define you board name here:
-
 //`define AVNET_MICROBOARD_LX9
 //`define XILINX_AC701_A200
 //`define QMTECH_SDRAM_LX16
@@ -184,9 +211,11 @@
     `define BOARD_CK_REF 100000000
     `define BOARD_CK_MUL 2
     `ifdef __3STAGE__
-        `define BOARD_CK_DIV 2 // 100MHz 
+        `define BOARD_CK_DIV 2 // 3-stage, 0-ws, 100MHz
+    `elsif __WAITSTATES__
+        `define BOARD_CK_DIV 2 // 2-stage, 1-ws, 100MHz
     `else
-        `define BOARD_CK_DIV 4 // 50MHz
+        `define BOARD_CK_DIV 4 // 2-stage, 0-ws, 50MHz
     `endif
 `endif
 
@@ -233,13 +262,14 @@
 `ifdef DIGILENT_SPARTAN3_S200
     `define BOARD_ID 7
     `define BOARD_CK 50000000
+    `define __RMW_CYCLE__
 `endif
 
 `ifdef ALIEXPRESS_HPC40GBE_K420
     `define BOARD_ID 8
     //`define BOARD_CK 200000000
     `define BOARD_CK_REF 100000000
-    `define BOARD_CK_MUL 11
+    `define BOARD_CK_MUL 12
     `define BOARD_CK_DIV 5
     `define XILINX7CLK 1
     `define INVRES 1    
@@ -252,6 +282,16 @@
     `define BOARD_CK_DIV 10
     `define XILINX7CLK 1
     `define VIVADO 1 
+    `define INVRES 1
+`endif
+
+`ifdef ALIEXPRESS_HPC40GBE_XKCU040
+    `define BOARD_ID 10
+    //`define BOARD_CK 200000000
+    `define BOARD_CK_REF 100000000
+    `define BOARD_CK_MUL 8  // x8/2 = 400MHZ (overclock!)
+    `define BOARD_CK_DIV 2  // vivado reco. = 250MHz
+    `define XILINX7CLK 1
     `define INVRES 1
 `endif
 

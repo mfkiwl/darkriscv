@@ -28,16 +28,23 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
 #
 
-ifndef BOARD
-	BOARD  = avnet_microboard_lx9
-	#BOARD  = xilinx_ac701_a200
-	#BOARD  = qmtech_sdram_lx16
-	#BOARD = lattice_brevia2_xp2
-endif
-
-include $(BOARD)/darksocv.mk
+#BOARD  = avnet_microboard_lx9
+#BOARD  = xilinx_ac701_a200
+#BOARD  = qmtech_sdram_lx16
+#BOARD = lattice_brevia2_xp2
 
 default: all
 
-all: ../tmp/darksocv.bit
-	echo build ok.
+ifdef BOARD
+
+include $(BOARD)/darksocv.mk
+
+else
+
+all:
+	@echo no board selected to build, done.
+
+clean:
+	@echo no board selected to clean, done.
+
+endif

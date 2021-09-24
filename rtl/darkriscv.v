@@ -62,8 +62,8 @@ module darkriscv
     input             RES,   // reset
     input             HLT,   // halt
     
-`ifdef __THREADING__    
-    input             IREQ,  // irq req
+`ifdef __THREADS__    
+    output [`__THREADS__-1:0] TPTR,  // thread pointer
 `endif    
 
     input      [31:0] IDATA, // instruction data bus
@@ -81,8 +81,10 @@ module darkriscv
     output            WR,    // write enable
     output            RD,    // read enable 
 `endif    
+
+    output            IDLE,   // idle output
     
-    output [3:0]  DEBUG      // old-school osciloscope based debug! :)
+    output [3:0]  DEBUG       // old-school osciloscope based debug! :)
 );
 
     // dummy 32-bit words w/ all-0s and all-1s: 
@@ -90,8 +92,10 @@ module darkriscv
     wire [31:0] ALL0  = 0;
     wire [31:0] ALL1  = -1;
 
-`ifdef __THREADING__
-    reg XMODE = 0;     // 0 = user, 1 = exception
+`ifdef __THREADS__
+    reg [`__THREADS__-1:0] XMODE = 0;     // thread ptr
+    
+    assign TPTR = XMODE;
 `endif
     
     // pre-decode: IDATA is break apart as described in the RV32I specification
@@ -149,29 +153,22 @@ module darkriscv
     reg FLUSH = -1;  // flush instruction pipeline
 `endif
 
-`ifdef __THREADING__    
-
+`ifdef __THREADS__    
     `ifdef __RV32E__
     
-        reg [4:0] RESMODE = -1;
+        reg [`__THREADS__+3:0] RESMODE = -1;
 
-        wire [4:0] DPTR   = XRES ? RESMODE : { XMODE, XIDATA[10: 7] }; // set SP_RESET when RES==1
-        wire [4:0] S1PTR  = { XMODE, XIDATA[18:15] };
-        wire [4:0] S2PTR  = { XMODE, XIDATA[23:20] };
+        wire [`__THREADS__+3:0] DPTR   = XRES ? RESMODE : { XMODE, XIDATA[10: 7] }; // set SP_RESET when RES==1
+        wire [`__THREADS__+3:0] S1PTR  = { XMODE, XIDATA[18:15] };
+        wire [`__THREADS__+3:0] S2PTR  = { XMODE, XIDATA[23:20] };
     `else
-        reg [5:0] RESMODE = -1;
+        reg [`__THREADS__+4:0] RESMODE = -1;
 
-        wire [5:0] DPTR   = XRES ? RESMODE : { XMODE, XIDATA[11: 7] }; // set SP_RESET when RES==1
-        wire [5:0] S1PTR  = { XMODE, XIDATA[19:15] };
-        wire [5:0] S2PTR  = { XMODE, XIDATA[24:20] };
+        wire [`__THREADS__+4:0] DPTR   = XRES ? RESMODE : { XMODE, XIDATA[11: 7] }; // set SP_RESET when RES==1
+        wire [`__THREADS__+4:0] S1PTR  = { XMODE, XIDATA[19:15] };
+        wire [`__THREADS__+4:0] S2PTR  = { XMODE, XIDATA[24:20] };
     `endif
-
-    wire [6:0] OPCODE = FLUSH ? 0 : XIDATA[6:0];
-    wire [2:0] FCT3   = XIDATA[14:12];
-    wire [6:0] FCT7   = XIDATA[31:25];
-
 `else
-
     `ifdef __RV32E__    
     
         reg [3:0] RESMODE = -1;
@@ -186,12 +183,11 @@ module darkriscv
         wire [4:0] S1PTR  = XIDATA[19:15];
         wire [4:0] S2PTR  = XIDATA[24:20];    
     `endif
+`endif
 
     wire [6:0] OPCODE = FLUSH ? 0 : XIDATA[6:0];
     wire [2:0] FCT3   = XIDATA[14:12];
     wire [6:0] FCT7   = XIDATA[31:25];
-
-`endif
 
     wire [31:0] SIMM  = XSIMM;
     wire [31:0] UIMM  = XUIMM;
@@ -213,26 +209,22 @@ module darkriscv
     //wire    FCC = FLUSH ? 0 : XFCC; // OPCODE==7'b0001111; //FCT3
     //wire    CCC = FLUSH ? 0 : XCCC; // OPCODE==7'b1110011; //FCT3
 
-`ifdef __THREADING__
-`ifdef __3STAGE__
-    reg [31:0] NXPC2 [0:1];       // 32-bit program counter t+2
-`endif
-    reg [31:0] NXPC;        // 32-bit program counter t+1
-    reg [31:0] PC;		    // 32-bit program counter t+0
+`ifdef __THREADS__
+    `ifdef __3STAGE__
+        reg [31:0] NXPC2 [0:(2**`__THREADS__)-1];       // 32-bit program counter t+2
+    `endif
 
     `ifdef __RV32E__
-        reg [31:0] REG1 [0:31];	// general-purpose 16x32-bit registers (s1)
-        reg [31:0] REG2 [0:31];	// general-purpose 16x32-bit registers (s2)
+        reg [31:0] REG1 [0:16*(2**`__THREADS__)-1];	// general-purpose 16x32-bit registers (s1)
+        reg [31:0] REG2 [0:16*(2**`__THREADS__)-1];	// general-purpose 16x32-bit registers (s2)
     `else
-        reg [31:0] REG1 [0:63];	// general-purpose 32x32-bit registers (s1)
-        reg [31:0] REG2 [0:63];	// general-purpose 32x32-bit registers (s2)    
+        reg [31:0] REG1 [0:32*(2**`__THREADS__)-1];	// general-purpose 32x32-bit registers (s1)
+        reg [31:0] REG2 [0:32*(2**`__THREADS__)-1];	// general-purpose 32x32-bit registers (s2)    
     `endif
 `else
-`ifdef __3STAGE__
-    reg [31:0] NXPC2;       // 32-bit program counter t+2
-`endif
-    reg [31:0] NXPC;        // 32-bit program counter t+1
-    reg [31:0] PC;		    // 32-bit program counter t+0
+    `ifdef __3STAGE__
+        reg [31:0] NXPC2;       // 32-bit program counter t+2
+    `endif
 
     `ifdef __RV32E__
         reg [31:0] REG1 [0:15];	// general-purpose 16x32-bit registers (s1)
@@ -243,13 +235,17 @@ module darkriscv
     `endif
 `endif
 
+    reg [31:0] NXPC;        // 32-bit program counter t+1
+    reg [31:0] PC;		    // 32-bit program counter t+0
+
     // source-1 and source-1 register selection
 
-    wire signed   [31:0] S1REG = REG1[S1PTR];
-    wire signed   [31:0] S2REG = REG2[S2PTR];
-    
     wire          [31:0] U1REG = REG1[S1PTR];
     wire          [31:0] U2REG = REG2[S2PTR];
+
+    wire signed   [31:0] S1REG = U1REG;
+    wire signed   [31:0] S2REG = U2REG;
+    
 
     // L-group of instructions (OPCODE==7'b0000011)
 
@@ -302,14 +298,13 @@ module darkriscv
                          FCT3==0 ? (XRCC&&FCT7[5] ? U1REG-U2REGX : U1REG+S2REGX) :
                          FCT3==1 ? U1REG<<U2REGX[4:0] :                         
                          //FCT3==5 ? 
-                         
-// maybe the $signed solves the problem for MODELSIM too! needs to be tested!
-//`ifdef MODEL_TECH        
-//                         FCT7[5] ? -((-U1REG)>>U2REGX[4:0]; // workaround for modelsim
-//`else
-                         FCT7[5] ? $signed(S1REG>>>U2REGX[4:0]) : // (FCT7[5] ? U1REG>>>U2REG[4:0] : 
-//`endif                        
-                                   U1REG>>U2REGX[4:0];
+                         !FCT7[5] ? U1REG>>U2REGX[4:0] :
+`ifdef MODEL_TECH        
+                         FCT7[5] ? -((-U1REG)>>U2REGX[4:0]; // workaround for modelsim
+`else
+                                   $signed(S1REG>>>U2REGX[4:0]);  // (FCT7[5] ? U1REG>>>U2REG[4:0] : 
+`endif                        
+
 `ifdef __MAC16X16__
 
     // MAC instruction rd += s1*s2 (OPCODE==7'b1111111)
@@ -337,41 +332,11 @@ module darkriscv
                           /*FCT3==1 ? */ U1REG^S2REGX); //U1REG!=U2REG); // bne
                                     //0);
 
+    wire [31:0] PCSIMM = PC+SIMM;
     wire        JREQ = (JAL||JALR||BMUX);
-    wire [31:0] JVAL = JALR ? DADDR : PC+SIMM; // SIMM + (JALR ? U1REG : PC);
+    wire [31:0] JVAL = JALR ? DADDR : PCSIMM; // SIMM + (JALR ? U1REG : PC);
 
-`ifdef __PERFMETER__
-    integer clocks=0, user=0, super=0, halt=0, flush=0;
 
-    always@(posedge CLK)
-    begin
-        if(!XRES)
-        begin
-            clocks = clocks+1;
-
-    `ifdef __THREADING__
-    
-            if(XMODE==0 && !HLT && !FLUSH)      user  = user +1;
-            if(XMODE==1 && !HLT && !FLUSH)      super = super+1;
-    `else    
-            if(!HLT && !FLUSH)                  user  = user +1;
-    `endif
-
-            if(HLT)             halt=halt+1;
-            if(FLUSH)           flush=flush+1;
-                
-            if(clocks && clocks%`__PERFMETER__==0)     
-            begin
-                $display("%d clocks: %0d%% user, %0d%% super, %0d%% ws, %0d%% flush",
-                    clocks,
-                    100*user/clocks,
-                    100*super/clocks,
-                    100*halt/clocks,
-                    100*flush/clocks);
-            end
-        end
-    end
-`endif
 
     always@(posedge CLK)
     begin
@@ -395,7 +360,7 @@ module darkriscv
 `endif
                        HLT ? REG1[DPTR] :        // halt
                      !DPTR ? 0 :                // x0 = 0, always!
-                     AUIPC ? PC+SIMM :
+                     AUIPC ? PCSIMM :
                       JAL||
                       JALR ? NXPC :
                        LUI ? SIMM :
@@ -413,7 +378,7 @@ module darkriscv
 `endif        
                        HLT ? REG2[DPTR] :        // halt
                      !DPTR ? 0 :                // x0 = 0, always!
-                     AUIPC ? PC+SIMM :
+                     AUIPC ? PCSIMM :
                       JAL||
                       JALR ? NXPC :
                        LUI ? SIMM :
@@ -427,26 +392,27 @@ module darkriscv
 
 `ifdef __3STAGE__
 
-`ifdef __THREADING__
+    `ifdef __THREADS__
 
         NXPC <= /*XRES ? `__RESETPC__ :*/ HLT ? NXPC : NXPC2[XMODE];
 
-        NXPC2[RES ? RESMODE[0] : XMODE] <=  XRES ? `__RESETPC__ : HLT ? NXPC2[XMODE] :   // reset and halt
+        NXPC2[XRES ? RESMODE[`__THREADS__-1:0] : XMODE] <=  XRES ? `__RESETPC__ : HLT ? NXPC2[XMODE] :   // reset and halt
                                       JREQ ? JVAL :                            // jmp/bra
 	                                         NXPC2[XMODE]+4;                   // normal flow
 
         XMODE <= XRES ? 0 : HLT ? XMODE :        // reset and halt
-	             XMODE==0&& IREQ&&(JAL||JALR||BMUX) ? 1 :         // wait pipeflush to switch to irq
-                 XMODE==1&&!IREQ&&(JAL||JALR||BMUX) ? 0 : XMODE;  // wait pipeflush to return from irq
+                            JAL ? XMODE+1 : XMODE;
+	             //XMODE==0/*&& IREQ*/&&(JAL||JALR||BMUX) ? 1 :         // wait pipeflush to switch to irq
+                 //XMODE==1/*&&!IREQ*/&&(JAL||JALR||BMUX) ? 0 : XMODE;  // wait pipeflush to return from irq
 
-`else
+    `else
         NXPC <= /*XRES ? `__RESETPC__ :*/ HLT ? NXPC : NXPC2;
 	
 	    NXPC2 <=  XRES ? `__RESETPC__ : HLT ? NXPC2 :   // reset and halt
 	                 JREQ ? JVAL :                    // jmp/bra
 	                        NXPC2+4;                   // normal flow
 
-`endif
+    `endif
 
 `else
         NXPC <= XRES ? `__RESETPC__ : HLT ? NXPC :   // reset and halt
@@ -481,14 +447,16 @@ module darkriscv
 `endif
 
 `ifdef __3STAGE__
-`ifdef __THREADING__
-	assign IADDR = NXPC2[XMODE];
-`else
-    assign IADDR = NXPC2;
-`endif    
+    `ifdef __THREADS__
+        assign IADDR = NXPC2[XMODE];
+    `else
+        assign IADDR = NXPC2;
+    `endif    
 `else
     assign IADDR = NXPC;
 `endif
+
+    assign IDLE = |FLUSH;
 
     assign DEBUG = { XRES, |FLUSH, SCC, LCC };
 
