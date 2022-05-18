@@ -31,6 +31,25 @@
 #include <io.h>
 #include <stdio.h>
 
+void irq_handler(void) __attribute__ ((interrupt ("machine")));
+
+void irq_handler(void)
+{
+    if(io.irq == IRQ_TIMR)
+    {
+        if(!utimers--)
+        {
+            io.led++;
+            utimers=999999;
+        }
+        io.irq = IRQ_TIMR;
+    }
+
+    return;
+}
+
+volatile int heapcheck = 0xdeadbeef;
+
 int main(void)
 {
     printf("board: %s (id=%d)\n",board_name(io.board_id),io.board_id);
@@ -49,8 +68,25 @@ int main(void)
     
     threads = 0; // prepare for the next restart
 
+
     printf("uart0: 115200 bps (div=%d)\n",io.uart.baud);
     printf("timr0: frequency=%dHz (io.timer=%d)\n",(io.board_cm*1000000u+io.board_ck*10000u)/(io.timer+1),io.timer);
+
+    set_mtvec(irq_handler);
+    
+    unsigned mtvec = get_mtvec();
+    
+    if(mtvec)
+    {
+        printf("mtvec: handler@%d, enabling interrupts...\n",mtvec);
+        set_mie(1);
+        printf("mtvec: interrupts enabled!\n");
+    }
+    else
+        printf("mtvec: not found (polling only)\n");
+
+    io.irq = IRQ_TIMR; // clear interrupts
+    
     printf("\n");
 
     printf("Welcome to DarkRISCV!\n");
@@ -63,6 +99,28 @@ int main(void)
 
         printf("> ");
         memset(buffer,0,sizeof(buffer));
+        
+        if(mtvec==0)
+        {
+            while(1)
+            {            
+                if(io.irq&IRQ_TIMR)
+                {
+                    if(!utimers--)
+                    {
+                        io.led++;
+                        utimers=999999;
+                    }
+                    io.irq = IRQ_TIMR;
+                }
+                
+                if(io.uart.stat&2)
+                {
+                    break;
+                }
+            }
+        }
+        
         gets(buffer,sizeof(buffer));
         
         char *argv[8];
@@ -202,10 +260,16 @@ int main(void)
           if(argv[0][0])
           {
               printf("command: [%s] not found.\n"
-                     "valid commands: clear, dump <hex>, led <hex>, timer <dec>, gpio <hex>\n"
-                     "                mul <dec> <dec>, div <dec> <dec>, mac <dec> <dec> <dec>\n"
-                     "                rd[m][bwl] <hex> [<hex> when m], wr[m][bwl] <hex> <hex> [<hex> when m]\n",
+                     "valid commands: clear, dump [hex], led [hex], timer [dec], gpio [hex]\n"
+                     "                mul [dec] [dec], div [dec] [dec], mac [dec] [dec] [dec]\n"
+                     "                reboot, wr[m][bwl] [hex] [hex] [[hex] when m],\n"
+                     "                rd[m][bwl] [hex] [[hex] when m]\n",
                      argv[0]);
+          }
+          
+          if(heapcheck!=0xdeadbeef)
+          {
+              printf("out of memory detected, a reboot is recommended...\n");
           }
        }
     }

@@ -4,14 +4,14 @@
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 # 
-## Redistributions of source code must retain the above copyright notice, this
+# * Redistributions of source code must retain the above copyright notice, this
 #   list of conditions and the following disclaimer.
 # 
-## Redistributions in binary form must reproduce the above copyright notice,
+# * Redistributions in binary form must reproduce the above copyright notice,
 #   this list of conditions and the following disclaimer in the documentation
 #   and/or other materials provided with the distribution.
 # 
-## Neither the name of the copyright holder nor the names of its
+# * Neither the name of the copyright holder nor the names of its
 #   contributors may be used to endorse or promote products derived from
 #   this software without specific prior written permission.
 # 
@@ -26,35 +26,33 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
 
-ifndef ICARUS
-    ICARUS = iverilog -Wall
-endif
+#NET "CLK" TNM_NET = CLK;
 
-RTLS = darksimv.v ../rtl/darksocv.v ../rtl/darkuart.v ../rtl/darkriscv.v
-INCS = ../rtl/config.vh
-XSIM = darksocv
-VCDS = darksocv.vcd
+# without cache controller
+#TIMESPEC TS_CLK = PERIOD "CLK" 75MHz HIGH 50%;
 
-.PRECIOUS: $(VCDS)	# Do not delete the trace file if simulation is aborted
-.PHONY: $(VCDS)		# Always run the simulation
+# with cache controller
+#TIMESPEC TS_CLK = PERIOD "CLK" 75MHz HIGH 50%;
 
-ifdef HARVARD
-	SRCS = ../src/darksocv.rom.mem ../src/darksocv.ram.mem
-else
-	SRCS = ../src/darksocv.mem
-endif
+# QMtech K325 board
 
-DEPS = $(SRCS) $(RTLS) $(INCS)
+NET XCLK            LOC = F22 | IOSTANDARD = LVCMOS33 | PERIOD = 50MHz HIGH 50%;
+#NET XCLK            LOC = K15 | PERIOD = 66MHz HIGH 50%;
+#NET XCLK            LOC = V10 | PERIOD = 40MHz HIGH 50%;
 
-all: $(VCDS)
-	@echo simulation ok.
+NET XRES            LOC = AF9  | IOSTANDARD = LVCMOS18 | PULLDOWN;
 
-clean:
-	-rm $(VCDS) $(XSIM)
+NET UART_RXD        LOC = B12 | IOSTANDARD = LVCMOS33 | PULLUP;  # DBJ2-16 -> U5-16 B12
+NET UART_TXD        LOC = B11 | IOSTANDARD = LVCMOS33;           # DBJ2-15 -> U5-15 B11
 
-$(VCDS): $(XSIM)
-	./$(XSIM)
+NET LED[3]          LOC = U25 | IOSTANDARD = LVCMOS33; # U4
+NET LED[2]          LOC = T23 | IOSTANDARD = LVCMOS33; # U4
+NET LED[1]          LOC = H26 | IOSTANDARD = LVCMOS33;
+NET LED[0]          LOC = J26 | IOSTANDARD = LVCMOS33;
+
+NET DEBUG[3]        LOC = R23 | IOSTANDARD = LVCMOS33; # U4
+NET DEBUG[2]        LOC = P25 | IOSTANDARD = LVCMOS33; # U4
+NET DEBUG[1]        LOC = N23 | IOSTANDARD = LVCMOS33; # U4
+NET DEBUG[0]        LOC = M26 | IOSTANDARD = LVCMOS33; # U4
 
 
-$(XSIM): $(DEPS)
-	$(ICARUS) -I ../rtl -o $(XSIM) $(RTLS)

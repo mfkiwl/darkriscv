@@ -98,6 +98,21 @@
 // the DLEN operand size in the data bus width available.
 //`define __FLEXBUZZ__
 
+// interrupt support
+// 
+// The interrupt support in the core uses the machine registers mtvec and 
+// mepc, which means support the control special register instruction csrrw,
+// in a way that is possible read/write the mtvec and mepc.
+// the interrupt itself works like the thread switch, with the difference
+// that:
+// a) the PC will be saved in the mepc register
+// b)the PC will receive the mtvec value
+// c) single interrupt, which means that the mtvec offset is always zero
+// The interrupt support cannot be used with threading (because makes no 
+// much sense?)... also, it requires the 3 stage pipeline (again, makes no
+// much sense use it with the 2-stage pipeline).
+//`define __INTERRUPT__
+
 // initial PC and SP
 //
 // it is possible program the initial PC and SP.  Typically, the PC is set
@@ -108,11 +123,19 @@
 // the stack can be positioned in the top of RAM and does not match with the
 // .data.
 `define __RESETPC__ 32'd0
-`define __RESETSP__ 32'd8192
+`define __RESETSP__ 32'd0
 
 ////////////////////////////////////////////////////////////////////////////////
-// darkocv configuration:
+// darksocv configuration:
 ////////////////////////////////////////////////////////////////////////////////
+
+// interactive simulation:
+// 
+// When enabled, will trick the simulator in order to enable interactive
+// access via the stdin, in a way that is possible type interactive commands,
+// which will make your simulator crazy! unfortunately, it works only with
+// iverilog... at least, Xilinx ISIM does not liket the $fgetc()
+//`define __INTERACTIVE__
 
 // performance measurement:
 //
@@ -165,7 +188,7 @@
 //`define __DCACHE__ // not working, must debug it! :(
 
 // UART speed is set in bits per second, typically 115200 bps:
-`define __UARTSPEED__ 115200
+//`define __UARTSPEED__ 115200
 
 // UART queue: 
 // 
@@ -295,6 +318,22 @@
     `define INVRES 1
 `endif
 
+`ifdef PAPILIO_DUO_LOGICSTART
+    `define BOARD_ID 11
+    `define BOARD_CK_REF 32000000
+    `define BOARD_CK_MUL 2
+    `define BOARD_CK_DIV 2
+`endif
+
+`ifdef QMTECH_KINTEX7_K325
+    `define BOARD_ID 12
+    `define BOARD_CK_REF 50000000
+    `define BOARD_CK_MUL 20
+    `define BOARD_CK_DIV 4
+    `define XILINX7CLK 1
+    `define INVRES 1
+`endif
+
 `ifndef BOARD_ID
     `define BOARD_ID 0    
     `define BOARD_CK 100000000
@@ -311,3 +350,21 @@
 `endif
 
 `define  __BAUD__ ((`BOARD_CK/`__UARTSPEED__))
+
+// register number depends of CPU type RV32[EI] and number of threads
+
+`ifdef __THREADS__
+    `undef __INTERRUPT__
+
+    `ifdef __RV32E__
+        `define RLEN 16*(2**`__THREADS__)
+    `else
+        `define RLEN 32*(2**`__THREADS__)
+    `endif
+`else
+    `ifdef __RV32E__
+        `define RLEN 16
+    `else
+        `define RLEN 32
+    `endif
+`endif

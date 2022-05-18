@@ -34,26 +34,11 @@
 
 #ifdef __RISCV__
 
-// idle time, update timer and blink the led! :)
-
-void _idle(void)
-{
-    if(io.irq&IRQ_TIMR)
-    {
-      if(!utimers--)
-      {
-        io.led++;
-        utimers=999999;
-      }
-      io.irq = IRQ_TIMR;
-    }
-}
-
 // putchar and getchar uses the "low-level" io
 
 int getchar(void)
 {
-  while((io.uart.stat&2)==0) _idle(); // uart empty, wait...
+  while((io.uart.stat&2)==0); // uart empty, wait...
   return io.uart.fifo;
 }
 
@@ -61,11 +46,11 @@ int putchar(int c)
 {
   if(c=='\n')
   {
-    while(io.uart.stat&1) _idle(); // uart busy, wait...
+    while(io.uart.stat&1); // uart busy, wait...
     io.uart.fifo = '\r';  
   }
   
-  while(io.uart.stat&1) _idle(); // uart busy, wait...
+  while(io.uart.stat&1); // uart busy, wait...
   return io.uart.fifo = c;
 }
 
@@ -117,48 +102,37 @@ int puts(char *p)
     return putchar('\n');
 }
 
-void putdx(unsigned i, int mode) // mode1 = dec, mode0 = hex
+void putnum(unsigned i, int base)
 {
-    char *hex="0123456789abcdef";
+    char ascii[]="0123456789abcdef";
+    char stack[32];
+    int  ptr = 0;
 
-    int dbd[] = { 1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1, 0 };
-    int dbx[] = { 16777216, 65536, 256, 1, 0 };
-
-    int *db = mode ? dbd : dbx;
-
-    if(mode && i<0)
+    if(base==10)
     {
-        putchar('-');
-        i=-1;
-    }
-
-    int j,k,l;
-
-    for(j=0,k=24;(l=db[j]);j++,k-=8)
-    {
-        if(l==1 || i>=l)
+        int j = i;
+        
+        if(j<0)
         {
-            if(mode)
-            {
-                putchar(hex[(i/l)%10]);
-            }
-            else
-            {
-                putchar(hex[(i>>(k+4))&15]);
-                putchar(hex[(i>>k)&15]);
-            }
+            putchar('-');
+            i = -j;
         }
     }
-}
 
-void putx(unsigned i)
-{
-    putdx(i,0);
-}
+    do
+    {
+        stack[ptr++] = ascii[(i%base)];
+        i/=base;
+        
+        if(base!=10)
+        {
+            stack[ptr++] = ascii[(i%base)];
+            i/=base;
+        }        
+    } 
+    while(i);
 
-void putd(int i)
-{
-    putdx(i,1);
+    while(ptr) putchar(stack[--ptr]);
 }
 
 int printf(char *fmt,...)
@@ -171,8 +145,8 @@ int printf(char *fmt,...)
         {
             fmt++;
                  if(*fmt=='s') putstr(va_arg(ap,char *));
-            else if(*fmt=='x') putx(va_arg(ap,int));
-            else if(*fmt=='d') putd(va_arg(ap,int));
+            else if(*fmt=='x') putnum(va_arg(ap,int),16);
+            else if(*fmt=='d') putnum(va_arg(ap,int),10);
             else putchar(*fmt);
         }
         else putchar(*fmt);
@@ -182,6 +156,8 @@ int printf(char *fmt,...)
 
     return 0;
 }
+
+// string manipulation
 
 int strncmp(char *s1,char *s2,int len)
 {
@@ -202,24 +178,6 @@ int strlen(char *s1)
     for(len=0;s1&&*s1++;len++);
 
     return len;
-}
-
-char *memcpy(char *dptr,char *sptr,int len)
-{
-    char *ret = dptr;
-
-    while(len--) *dptr++ = *sptr++;
-
-    return ret;
-}
-
-char *memset(char *dptr, int c, int len)
-{
-    char *ret = dptr;
-    
-    while(len--) *dptr++ = c;
-    
-    return ret;
 }
 
 char *strtok(char *str,char *dptr)
@@ -248,6 +206,28 @@ char *strtok(char *str,char *dptr)
     nxt = NULL;
     return ret;
 }
+
+// memory manipulation
+
+char *memcpy(char *dptr,char *sptr,int len)
+{
+    char *ret = dptr;
+
+    while(len--) *dptr++ = *sptr++;
+
+    return ret;
+}
+
+char *memset(char *dptr, int c, int len)
+{
+    char *ret = dptr;
+    
+    while(len--) *dptr++ = c;
+    
+    return ret;
+}
+
+// type conversion
 
 int atoi(char *s1)
 {
@@ -278,6 +258,8 @@ int xtoi(char *s1)
     
     return ret;
 }
+
+// mul/div
 
 int mac(int acc,short x,short y)
 {
@@ -361,12 +343,22 @@ int __modsi3(int x,int y)
     return __div_mod_si3(x,y,0);
 }
 
+// time management
+
 void usleep(int delay)
 {
+    if(get_mtvec()) 
+    {
+        while(delay--)
+        {
+            for(int t=utimers;t==utimers;); // with interrupts
+        }
+    }
+    else
     {
         while(delay--) 
         {
-            for(io.irq=IRQ_TIMR;!io.irq;);
+            for(io.irq=IRQ_TIMR;!io.irq;); // without interrupts
         }
     }
 }

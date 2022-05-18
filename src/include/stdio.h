@@ -54,5 +54,11 @@ int xtoi(char *);
 int mac(int,short,short);
 void usleep(int);
 int check4rv32i(void);
+void set_mtvec(void (*f)(void));
+void set_mepc(void (*f)(void));
+void set_mie(int);
+int get_mtvec(void);
+int get_mepc(void);
+int get_mie(void);
 
 #endif
