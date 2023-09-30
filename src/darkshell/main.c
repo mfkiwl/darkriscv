@@ -1,21 +1,21 @@
 /*
  * Copyright (c) 2018, Marcelo Samsoniuk
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
- * 
+ *
  * * Redistributions of source code must retain the above copyright notice, this
  *   list of conditions and the following disclaimer.
- * 
+ *
  * * Redistributions in binary form must reproduce the above copyright notice,
  *   this list of conditions and the following disclaimer in the documentation
  *   and/or other materials provided with the distribution.
- * 
+ *
  * * Neither the name of the copyright holder nor the names of its
  *   contributors may be used to endorse or promote products derived from
  *   this software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -25,57 +25,44 @@
  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <io.h>
 #include <stdio.h>
 
-void irq_handler(void) __attribute__ ((interrupt ("machine")));
-
-void irq_handler(void)
-{
-    if(io.irq == IRQ_TIMR)
-    {
-        if(!utimers--)
-        {
-            io.led++;
-            utimers=999999;
-        }
-        io.irq = IRQ_TIMR;
-    }
-
-    return;
-}
-
-volatile int heapcheck = 0xdeadbeef;
-
 int main(void)
 {
+    unsigned mtvec=0;
+
     printf("board: %s (id=%d)\n",board_name(io.board_id),io.board_id);
     printf("build: %s for %s\n",BUILD,ARCH);
 
-    for(int i=0;i!=threads;i++)
-    {
-      printf("core0/thread%d: darkriscv@%d.%dMHz rv32%s%s%s\n",
-          i,
-          io.board_cm,                        // board clock MHz
-          io.board_ck,                        // board clock kHz
-          check4rv32i()?"i":"e",              // architecture
-          threads>1?"+MT":"",                 // MT  support
-          mac(1000,16,16)==1256?"+MAC":"");   // MAC support
-    }
-    
-    threads = 0; // prepare for the next restart
+    printf("core%d: ",              io.core_id);                 // core id
+    printf("darkriscv@%dMHz w/ ",io.board_cm*2);              // board clock MHz
+    printf("rv32%s ",               check4rv32i()?"i":"e");      // architecture
+    if(mac(1000,16,16)==1256)       printf("MAC ");              // MAC support
+    printf("\n");
 
+    printf("bram0: text@%d+%d data@%d+%d stack@%d\n",
+        (unsigned)&_text, (unsigned)&_etext-(unsigned)&_text,
+        (unsigned)&_data, (unsigned)&_edata-(unsigned)&_data,
+        (unsigned)&_stack);
 
-    printf("uart0: 115200 bps (div=%d)\n",io.uart.baud);
-    printf("timr0: frequency=%dHz (io.timer=%d)\n",(io.board_cm*1000000u+io.board_ck*10000u)/(io.timer+1),io.timer);
+    printf("bram0: %d bytes free\n",
+        (unsigned)&_stack-(unsigned)&_edata);
+
+    _edata = 0xdeadbeef;
+
+    printf("uart0: 115.2kbps (div=%d)\n",io.uart.baud);
+    printf("timr0: %dHz (div=%d)\n",(io.board_cm*2000000u)/(io.timer+1),io.timer);
+
+#ifndef SMALL
 
     set_mtvec(irq_handler);
-    
-    unsigned mtvec = get_mtvec();
-    
+
+    mtvec = get_mtvec();
+
     if(mtvec)
     {
         printf("mtvec: handler@%d, enabling interrupts...\n",mtvec);
@@ -85,8 +72,11 @@ int main(void)
     else
         printf("mtvec: not found (polling only)\n");
 
+#endif
+
     io.irq = IRQ_TIMR; // clear interrupts
-    
+    utimers = 0;
+
     printf("\n");
 
     printf("Welcome to DarkRISCV!\n");
@@ -95,15 +85,15 @@ int main(void)
 
     while(1)
     {
-        char  buffer[64];
+        char  buffer[32];
 
         printf("> ");
         memset(buffer,0,sizeof(buffer));
-        
+
         if(mtvec==0)
         {
             while(1)
-            {            
+            {
                 if(io.irq&IRQ_TIMR)
                 {
                     if(!utimers--)
@@ -113,16 +103,35 @@ int main(void)
                     }
                     io.irq = IRQ_TIMR;
                 }
-                
+
                 if(io.uart.stat&2)
                 {
                     break;
                 }
             }
         }
-        
+
         gets(buffer,sizeof(buffer));
-        
+
+#ifdef SMALL
+
+        if(!strcmp(buffer,"led"))
+        {
+            printf("led flip!\n");
+            io.led = ~io.led;
+        }
+        else
+        if(!strcmp(buffer,"reboot"))
+        {
+            printf("rebooting...\n");
+
+            return 0;
+        }
+
+#endif
+
+#ifndef SMALL
+
         char *argv[8];
         int   argc;
 
@@ -139,18 +148,10 @@ int main(void)
           else
           if(!strcmp(argv[0],"reboot"))
           {
-              int i;
-              
-              printf("core0: reboot in 3 seconds");
-              
-              for(i=0;i!=3;i++) 
-              {
-                  usleep(1000000);
-                  putchar('.');
-              }
-              
-              printf("done.\n");
-                     
+              set_mie(0);
+              printf("mtvec: interrupts disabled!\n");
+              printf("rebooting...\n");
+
               return 0;
           }
           else
@@ -159,11 +160,11 @@ int main(void)
               char *p=(char *)(kmem+(argv[1]?xtoi(argv[1]):0));
 
               int i,j;
-              
+
               for(i=0;i!=16;i++)
               {
                   printf("%x: ",(unsigned) p);
-              
+
                   for(j=0;j!=16;j++) printf("%x ",p[j]);
                   for(j=0;j!=16;j++) putchar((p[j]>=32&&p[j]<127)?p[j]:'.');
 
@@ -177,15 +178,15 @@ int main(void)
               int kp = 2,
                   i = 1,j,k,w,
                   vp = 1;
-              
+
               if(argv[0][kp]=='m')
               {
                   i=xtoi(argv[vp++]);
                   kp++;
               }
-          
+
               printf("%x: ",k=xtoi(argv[vp++]));
-              
+
               for(j=0;i--;j++)
               {
                   if(argv[0][0]=='r')
@@ -208,14 +209,14 @@ int main(void)
           if(!strcmp(argv[0],"led"))
           {
               if(argv[1]) io.led = xtoi(argv[1]);
-              
+
               printf("led = %x\n",io.led);
           }
           else
           if(!strcmp(argv[0],"timer"))
           {
               if(argv[1]) io.timer = atoi(argv[1]);
-              
+
               printf("timer = %d\n",io.timer);
           }
           else
@@ -230,7 +231,7 @@ int main(void)
           {
               int x = atoi(argv[1]);
               int y = atoi(argv[2]);
-              
+
               printf("mul = %d\n",x*y);
           }
           else
@@ -266,11 +267,13 @@ int main(void)
                      "                rd[m][bwl] [hex] [[hex] when m]\n",
                      argv[0]);
           }
-          
-          if(heapcheck!=0xdeadbeef)
+
+          /*if(_edata!=0xdeadbeef)
           {
-              printf("out of memory detected, a reboot is recommended...\n");
-          }
+              printf("out of memory detected...\n");
+              return -1;
+          }*/
        }
+#endif
     }
 }

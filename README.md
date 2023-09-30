@@ -5,22 +5,25 @@ Opensource RISC-V implemented from scratch in one night!
 
 ## Table of Contents
 
-- [Introduction](#introduction)
-- [History](#history)
-- [Project Background](#project-background)
-- [Directory Description](#directory-description)
-- ["src" Directory](#src-directory)
-- ["sim" Directory](#sim-directory)
-- ["rtl" Directory](#rtl-directory)
-- ["board" Directory](#board-directory)
-- [Implementation Notes](#implementation-notes)
-- [Development Tools](#development-tools)
-- [Development Boards](#development-boards)
-- [Creating a RISCV from scratch](#creating-a-riscv-from-scratch)
-- [Academic Papers and Applications](#academic-papers-and-applications)
-- [Performance Comparisons](#performance-comparisons)
-- [Acknowledgments](#acknowledgments)
-- [References](#references)
+- [DarkRISCV](#darkriscv)
+	- [Table of Contents](#table-of-contents)
+	- [Introduction](#introduction)
+	- [History](#history)
+	- [Project Background](#project-background)
+	- [Directory Description](#directory-description)
+		- ["src" Directory](#src-directory)
+		- ["sim" Directory](#sim-directory)
+		- ["rtl" Directory](#rtl-directory)
+		- ["board" Directory](#board-directory)
+	- [Implementation Notes*](#implementation-notes)
+	- [Development Tools](#development-tools)
+	- [Development Boards](#development-boards)
+	- [FuseSoC support](#fusesoc-support)
+	- [Creating a RISCV from scratch](#creating-a-riscv-from-scratch)
+	- [Academic Papers and Applications](#academic-papers-and-applications)
+	- [Performance Comparisons](#performance-comparisons)
+	- [Acknowledgments](#acknowledgments)
+	- [References](#references)
 
 ## Introduction
 
@@ -495,12 +498,23 @@ Implementation Notes section.
 
 The current supported boards are:
 
-- avnet_microboard_lx9
-- lattice_brevia2_xp2
-- piswords_rs485_lx9
-- qmtech_sdram_lx16
-- qmtech_spartan7_s15
-- xilinx_ac701_a200
+- id==0   simulation only
+- id==1   avnet_microboard_lx9
+- id==2   xilinx_ac701_a200
+- id==3   qmtech_sdram _lx16
+- id==4   qmtech_spartan7_s15
+- id==5   lattice_brevia2_lxp2
+- id==6   piswords_rs485_lx9
+- id==7   digilent_spartan3_s200
+- id==8   aliexpress_hpc40gbe k420
+- id==9   qmtech_artix7_a35
+- id==10  aliexpress_hpc40gbe_ku040
+- id==11  papilio_duo_logicstart
+- id==12  qmtech_kintex7_k325
+- id==13  scarab_minispartan6-plus_lx9
+- id==14  colorlighti9_ecp5-45f
+- id==15  colorlighti5_ecp5-25f
+- id==16  ulx3s_ecp5-85f
 
 The organization is self-explained, w/ the vender, board and FPGA model
 in the name of the directory. Each  *board* directory contains the project 
@@ -1042,6 +1056,19 @@ independent buses, but in reality they area in the same memory area, which
 makes possible the data bus change the area where the code is stored. With
 this feature, it will be possible in the future create loadable codes from
 the FLASH memory! :)
+
+## FuseSoC support
+
+Last xmas (2022) our colleague Lucas Teske added support for FuseSoC in the darkriscv... I am not much aware how it works and how use it, but it is supposed to handle the build tools automatically! It is the same tool used by SERV and I used it to add some kilocore records in the past... in order to make it work in the darkriscv, please try:
+
+- fusesoc run --target=qmtech_artix7_a35 darklife:darkriscv:darksocv
+
+At this moment, not all boards are really supported yet. Supported boards are:
+
+- Colorlight i9
+- Colorlight i5
+- Lattice iCE40 Devkit
+- QMtech Artix 7 (Vivado)
 
 ## Creating a RISCV from scratch
 

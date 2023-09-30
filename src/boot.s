@@ -28,137 +28,236 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-	.option nopic
-	.text
-	.section .boot
+	.option pic
+	.section .text
 	.align	2
-	.globl  check4rv32i
-    .globl  set_mtvec
-    .globl  set_mepc
-    .globl  set_mie
-    .globl  get_mtvec
-    .globl  get_mepc
-    .globl  get_mie
-    .globl  get_mip
+    .globl  _start
 
 /*
-	boot:
-	- read and increent thread counter
-	- case not zero, jump to multi thread boot
-	- otherwise continue	
+    start:
+    - read and increent thread counter
+    - case not zero, jump to multi thread boot
+    - otherwise continue    
 */
 
-_boot:
+_start:
 
-	la	a0,threads
-	lw 	a1,0(a0)
-	addi	a2,a1,1
-	sw	a2,0(a0)
-	la	a3,io
-	bne	a1,x0,_multi_thread_boot
+    /* check core id, boot only core 0 */
+
+    la  a1,0x80000000
+    lbu a2,2(a1)
+
+_thread_lock:
+    bne a2,x0,_thread_lock
+    
+    /* check simulation, skip uart boot */
+
+    la  a1,0x80000000
+    lb  a0,0(a1)
+    beq a0,x0,_normal_boot
 
 /*
-	normal boot here:
-	- set stack
-	- set global pointer
-	- plot boot banner
-	- print memory setup
-	- call main
-	- repeat forever
+    uart boot here:
+    
+    - check for uart 3x w/ 1s timeout
+    - case there is data, download it to main()
+    - otherwise, go to normal boot
+*/
+
+    li  a0,'u'
+    call _uart_putchar
+
+    la a3,main
+    li a4,5
+    li a5,8192000
+
+    _uart_boot_loop1:
+
+        _uart_boot_loop2:
+
+            addi a0,a5,0
+            call _uart_getchar
+
+            blt a0,x0,_uart_boot_exit
+
+            sb a0,0(a3)
+            addi a3,a3,1
+
+            j _uart_boot_loop2
+
+        _uart_boot_exit:
+
+        li a0,'.'
+        call _uart_putchar
+        addi a4,a4,-1
+        bgt a4,x0,_uart_boot_loop1
+
+    li  a0,'b'
+
+    call _uart_putchar
+
+/*
+    normal boot here:
+
+    - call main
+    - set stack
+    - set global pointer
+    - plot boot banner
+    - repeat forever
 */
 
 _normal_boot:
 
+/*
+    RLE code start here:
+
+    register int c,s;
+    register char *p = rle_logo; // = a3
+   
+    while(*p)
+    {
+        c = *p++; // = a0
+        s = *p++; // = a4
+      
+        while(s--) putchar(c); // uses a0, a1, a2
+    }
+*/
+
+    addi a0,x0,'\n'
+    call _uart_putchar
+
+    lla a3,_rle_banner
+    lla a5,_rle_dict
+
+     lbu a4,0(a3)
+   
+    _rle_banner_loop1:
+ 
+        srli a0,a4,6
+        add a0,a0,a5
+        lbu a0,0(a0)
+
+        andi a4,a4,63
+        addi a3,a3,1
+
+        _rle_banner_loop2:
+
+            call _uart_putchar
+            addi a4,a4,-1
+
+            bgt a4,x0,_rle_banner_loop2
+
+        lbu a4,0(a3)
+        bne a4,x0,_rle_banner_loop1        
+
+    lla a3,_str_banner
+
+    _str_banner_loop3:
+
+        lbu a0,0(a3)
+        call _uart_putchar
+        addi a3,a3,1
+        bne a0,x0,_str_banner_loop3
+
+    /* RLL banner code end */
+
 	la	sp,_stack
 	la	gp,_global
 
-	call 	banner
-
-	la	a3,_stack
-	la	a2,_heap
-	sub	a4,a3,a2
-	la	a1,_boot
-	la	a0,_boot0msg
-	call	printf
+    xor    a0,a0,a0 /* argc = 0 */
+    xor    a1,a1,a1 /* argv = 0 */
+    xor    a2,a2,a2 /* envp = 0 */
 
 	call	main
 
-	j	_normal_boot
+	j	_start
 
-/*
-	multi-thread boot:
-	- set io base
-	- write thread number to io.gpio
-	- increent thread number
-	- repeat forever
+/* 
+    uart_putchar:
+    
+    - wait until not busy
+    - a0 = char to print
+    - a1 = soc.uart0.stat
+    - a2 = *soc.uart0.stat
+    - a0 = return the same data
 */
 
-_multi_thread_boot:
+_uart_putchar:
 
-	sh	a1,10(a3)
-	addi	a1,a1,1
-	j 	_multi_thread_boot
+    la a1,0x80000000
 
-/*
-	rv32e/rv32i detection:
-	- set x15 0
-	- set x31 1
-	- sub x31-x15 and return the value
-	why this works?!
-	- the rv32i have separate x15 and x31, but the rv32e will make x15 = x31
-	- this "feature" probably works only in the darkriscv! :)
+    _uart_putchar_busy:
+
+        lb      a2,4(a1)
+        not     a2,a2
+        andi    a2,a2,1
+        beq     a2,x0,_uart_putchar_busy
+
+    sb a0,5(a1)
+    li a1,'\n'
+
+    bne a0,a1,_uart_putchar_exit
+
+    li a0,'\r'
+    j _uart_putchar
+
+    _uart_putchar_exit:
+
+        ret
+
+/* 
+    uart_getchar:
+
+    - a0 = time out in loops
+    - a1 = soc.uart0.stat
+    - a2 = *soc.uart0.stat
+    - a0 = return *soc.uart0.fifo or -1
 */
 
-check4rv32i:
+_uart_getchar:
 
-        .word 	0x00000793 	/* addi    x15,x0,0   */
-        .word   0x00100f93	/* addi    x31,x0,1   */
-        .word   0x40ff8533	/* sub     a0,x31,x15 */
+    la  a1,0x80000000
 
-	ret
+    _uart_getchar_busy:
+
+        beq     a0,x0,_uart_getchar_tout
+        addi    a0,a0,-1
+
+        lb      a2,4(a1)
+        andi    a2,a2,2
+        beq     a2,x0,_uart_getchar_busy
+
+    lbu a0,5(a1)
+    ret
+
+    _uart_getchar_tout:
+
+        li a0,-1
+        ret
 
 /*
-    access to CSR registers (set/get)
+    data segment here!
 */
 
-set_mtvec:
-    csrw mtvec,a0
-    ret
+    .section .rodata
+    .align   1
 
-set_mepc:
-    csrw mepc,a0
-    ret
+_rle_banner:
 
-set_mie:
-    csrw mie,a0
-    ret
+    .byte 0x0e, 0xa0, 0xc1, 0x12, 0x9c, 0xc1, 0x4d, 0x07, 0x9a, 0xc1, 0x50 
+    .byte 0x06, 0x98, 0xc1, 0x52, 0x04, 0x98, 0xc1, 0x52, 0x04, 0x98, 0xc1 
+    .byte 0x52, 0x04, 0x98, 0xc1, 0x50, 0x06, 0x96, 0x02, 0xc1, 0x4d, 0x07 
+    .byte 0x96, 0x04, 0xc1, 0x42, 0x10, 0x96, 0x06, 0xc1, 0x42, 0x0c, 0x98 
+    .byte 0x06, 0x42, 0xc1, 0x44, 0x06, 0x9a, 0x06, 0x44, 0xc1, 0x46, 0x06 
+    .byte 0x96, 0x06, 0x46, 0xc1, 0x48, 0x06, 0x92, 0x06, 0x48, 0xc1, 0x4a 
+    .byte 0x06, 0x8e, 0x06, 0x4a, 0xc1, 0x4c, 0x06, 0x8a, 0x06, 0x4c, 0xc1 
+    .byte 0x4e, 0x06, 0x86, 0x06, 0x4e, 0xc1, 0x50, 0x06, 0x82, 0x06, 0x50 
+    .byte 0xc1, 0x52, 0x0a, 0x52, 0xc1, 0x54, 0x06, 0x54, 0xc1, 0x56, 0x02 
+    .byte 0x56, 0xc2, 0x07, 0x00
 
-get_mtvec:
-    addi  a0,x0,0
-    csrr a0,mtvec
-    ret
+_rle_dict:
+    
+    .byte 0x20, 0x72, 0x76, 0x0a
 
-get_mepc:
-    addi a0,x0,0
-    csrr a0,mepc
-    ret
-
-get_mie:
-    addi a0,x0,0
-    csrr a0,mie
-    ret
-
-get_mip:
-    addi a0,x0,0
-    csrr a0,mip
-    ret
-
-/*
-	data segment here!
-*/
-
-	.section .rodata
-	.align	2
-
-_boot0msg:
-	.string	"boot0: text@%d data@%d stack@%d (%d bytes free)\n"
+_str_banner:
+    .string "INSTRUCTION SETS WANT TO BE FREE\n\n"
