@@ -41,7 +41,7 @@
 `define SCC     7'b01000_11      // sxx   rs1,rs2,imm[11:0]
 `define MCC     7'b00100_11      // xxxi  rd,rs1,imm[11:0]
 `define RCC     7'b01100_11      // xxx   rd,rs1,rs2
-`define CCC     7'b11100_11      // exx, csrxx, mret
+`define SYS     7'b11100_11      // exx, csrxx, mret
 
 // proprietary extension (custom-0)
 `define CUS     7'b00010_11      // cus   rd,rs1,rs2,fc3,fct5
@@ -55,21 +55,16 @@
 `include "../rtl/config.vh"
 
 module darkriscv
-//#(
-//    parameter [31:0] RESET_PC = 0,
-//    parameter [31:0] RESET_SP = 4096
-//)
+#(
+    parameter CPTR = 0
+)
 (
     input             CLK,   // clock
     input             RES,   // reset
     input             HLT,   // halt
 
-`ifdef __THREADS__
-    output [`__THREADS__-1:0] TPTR,  // thread pointer
-`endif
-
 `ifdef __INTERRUPT__
-    input             INT,   // interrupt request
+    input             IRQ,   // interrupt request
 `endif
 
     input      [31:0] IDATA, // instruction data bus
@@ -79,16 +74,18 @@ module darkriscv
     output     [31:0] DATAO, // data bus (output)
     output     [31:0] DADDR, // addr bus
 
-`ifdef __FLEXBUZZ__
     output     [ 2:0] DLEN, // data length
-    output            RW,   // data read/write
-`else
-    output     [ 3:0] BE,   // byte enable
-    output            WR,    // write enable
-    output            RD,    // read enable
-`endif
+    output            DRW,  // data read/write
+    output            DRD,  // data read
+    output            DWR,  // data write
+    output            DAS,  // address strobe
 
-    output            IDLE,   // idle output
+    input             BERR, // bus error
+    
+`ifdef SIMULATION
+    input             ESIMREQ,  // end simulation req
+    output reg        ESIMACK = 0,  // end simulation ack
+`endif
 
     output [3:0]  DEBUG       // old-school osciloscope based debug! :)
 );
@@ -101,10 +98,22 @@ module darkriscv
     reg XRES = 1;
 
 `ifdef __THREADS__
-    reg [`__THREADS__-1:0] XMODE = 0;     // thread ptr
-
-    assign TPTR = XMODE;
+    reg [`__THREADS__-1:0] TPTR = 0;     // thread ptr
 `endif
+
+    // pipeline flow control on HLT!
+
+    reg        HLT2   = 0;
+    reg [31:0] IDATA2 = 0;
+
+    always@(posedge CLK)
+    begin
+        HLT2 <= HLT;
+        
+        if(HLT2^HLT) IDATA2 <= IDATA;    
+    end
+
+    wire[31:0] IDATAX = XRES ? 0 : HLT2 ? IDATA2 : IDATA;
 
     // decode: IDATA is break apart as described in the RV32I specification
 
@@ -112,48 +121,49 @@ module darkriscv
 
     reg [31:0] XIDATA;
 
-    reg XLUI, XAUIPC, XJAL, XJALR, XBCC, XLCC, XSCC, XMCC, XRCC, XCUS, XCCC; //, XFCC, XCCC;
+    reg XLUI, XAUIPC, XJAL, XJALR, XBCC, XLCC, XSCC, XMCC, XRCC, XCUS, XSYS; //, XFCC, XSYS;
 
     reg [31:0] XSIMM;
     reg [31:0] XUIMM;
 
     always@(posedge CLK)
     begin
-        XIDATA <= XRES ? 0 : HLT ? XIDATA : IDATA;
+        XIDATA <= HLT ? XIDATA : IDATAX;
 
-        XLUI   <= XRES ? 0 : HLT ? XLUI   : IDATA[6:0]==`LUI;
-        XAUIPC <= XRES ? 0 : HLT ? XAUIPC : IDATA[6:0]==`AUIPC;
-        XJAL   <= XRES ? 0 : HLT ? XJAL   : IDATA[6:0]==`JAL;
-        XJALR  <= XRES ? 0 : HLT ? XJALR  : IDATA[6:0]==`JALR;
+        XLUI   <= HLT ? XLUI   : IDATAX[6:0]==`LUI;
+        XAUIPC <= HLT ? XAUIPC : IDATAX[6:0]==`AUIPC;
+        XJAL   <= HLT ? XJAL   : IDATAX[6:0]==`JAL;
+        XJALR  <= HLT ? XJALR  : IDATAX[6:0]==`JALR;
 
-        XBCC   <= XRES ? 0 : HLT ? XBCC   : IDATA[6:0]==`BCC;
-        XLCC   <= XRES ? 0 : HLT ? XLCC   : IDATA[6:0]==`LCC;
-        XSCC   <= XRES ? 0 : HLT ? XSCC   : IDATA[6:0]==`SCC;
-        XMCC   <= XRES ? 0 : HLT ? XMCC   : IDATA[6:0]==`MCC;
+        XBCC   <= HLT ? XBCC   : IDATAX[6:0]==`BCC;
+        XLCC   <= HLT ? XLCC   : IDATAX[6:0]==`LCC;
+        XSCC   <= HLT ? XSCC   : IDATAX[6:0]==`SCC;
+        XMCC   <= HLT ? XMCC   : IDATAX[6:0]==`MCC;
 
-        XRCC   <= XRES ? 0 : HLT ? XRCC   : IDATA[6:0]==`RCC;
-        XCUS   <= XRES ? 0 : HLT ? XRCC   : IDATA[6:0]==`CUS;
-        //XFCC   <= XRES ? 0 : HLT ? XFCC   : IDATA[6:0]==`FCC;
-        XCCC   <= XRES ? 0 : HLT ? XCCC   : IDATA[6:0]==`CCC;
+        XRCC   <= HLT ? XRCC   : IDATAX[6:0]==`RCC;
+        XCUS   <= HLT ? XCUS   : IDATAX[6:0]==`CUS;
+        //XFCC   <= HLT ? XFCC   : IDATAX[6:0]==`FCC;
+        XSYS   <= HLT ? XSYS   : IDATAX[6:0]==`SYS;
 
-        // signal extended immediate, according to the instruction type:
+        // sign extended immediate, according to the instruction type:
 
-        XSIMM  <= XRES ? 0 : HLT ? XSIMM :
-                 IDATA[6:0]==`SCC ? { IDATA[31] ? ALL1[31:12]:ALL0[31:12], IDATA[31:25],IDATA[11:7] } : // s-type
-                 IDATA[6:0]==`BCC ? { IDATA[31] ? ALL1[31:13]:ALL0[31:13], IDATA[31],IDATA[7],IDATA[30:25],IDATA[11:8],ALL0[0] } : // b-type
-                 IDATA[6:0]==`JAL ? { IDATA[31] ? ALL1[31:21]:ALL0[31:21], IDATA[31], IDATA[19:12], IDATA[20], IDATA[30:21], ALL0[0] } : // j-type
-                 IDATA[6:0]==`LUI||
-                 IDATA[6:0]==`AUIPC ? { IDATA[31:12], ALL0[11:0] } : // u-type
-                                      { IDATA[31] ? ALL1[31:12]:ALL0[31:12], IDATA[31:20] }; // i-type
-        // non-signal extended immediate, according to the instruction type:
+        XSIMM  <= HLT ? XSIMM :
+                 IDATAX[6:0]==`SCC ? { IDATAX[31] ? ALL1[31:12]:ALL0[31:12], IDATAX[31:25],IDATAX[11:7] } : // s-type
+                 IDATAX[6:0]==`BCC ? { IDATAX[31] ? ALL1[31:13]:ALL0[31:13], IDATAX[31],IDATAX[7],IDATAX[30:25],IDATAX[11:8],ALL0[0] } : // b-type
+                 IDATAX[6:0]==`JAL ? { IDATAX[31] ? ALL1[31:21]:ALL0[31:21], IDATAX[31], IDATAX[19:12], IDATAX[20], IDATAX[30:21], ALL0[0] } : // j-type
+                 IDATAX[6:0]==`LUI||
+                 IDATAX[6:0]==`AUIPC ? { IDATAX[31:12], ALL0[11:0] } : // u-type
+                                      { IDATAX[31] ? ALL1[31:12]:ALL0[31:12], IDATAX[31:20] }; // i-type
 
-        XUIMM  <= XRES ? 0: HLT ? XUIMM :
-                 IDATA[6:0]==`SCC ? { ALL0[31:12], IDATA[31:25],IDATA[11:7] } : // s-type
-                 IDATA[6:0]==`BCC ? { ALL0[31:13], IDATA[31],IDATA[7],IDATA[30:25],IDATA[11:8],ALL0[0] } : // b-type
-                 IDATA[6:0]==`JAL ? { ALL0[31:21], IDATA[31], IDATA[19:12], IDATA[20], IDATA[30:21], ALL0[0] } : // j-type
-                 IDATA[6:0]==`LUI||
-                 IDATA[6:0]==`AUIPC ? { IDATA[31:12], ALL0[11:0] } : // u-type
-                                      { ALL0[31:12], IDATA[31:20] }; // i-type
+        // zero-extended (unsigned) immediate, according to the instruction type:
+
+        XUIMM  <= HLT ? XUIMM :
+                 IDATAX[6:0]==`SCC ? { ALL0[31:12], IDATAX[31:25],IDATAX[11:7] } : // s-type
+                 IDATAX[6:0]==`BCC ? { ALL0[31:13], IDATAX[31],IDATAX[7],IDATAX[30:25],IDATAX[11:8],ALL0[0] } : // b-type
+                 IDATAX[6:0]==`JAL ? { ALL0[31:21], IDATAX[31], IDATAX[19:12], IDATAX[20], IDATAX[30:21], ALL0[0] } : // j-type
+                 IDATAX[6:0]==`LUI||
+                 IDATAX[6:0]==`AUIPC ? { IDATAX[31:12], ALL0[11:0] } : // u-type
+                                      { ALL0[31:12], IDATAX[31:20] }; // i-type
     end
 
     reg [1:0] FLUSH = -1;  // flush instruction pipeline
@@ -162,46 +172,47 @@ module darkriscv
 
     wire [31:0] XIDATA;
 
-    wire XLUI, XAUIPC, XJAL, XJALR, XBCC, XLCC, XSCC, XMCC, XRCC, XCUS, XCCC; //, XFCC, XCCC;
+    wire XLUI, XAUIPC, XJAL, XJALR, XBCC, XLCC, XSCC, XMCC, XRCC, XCUS, XSYS; //, XFCC, XSYS;
 
     wire [31:0] XSIMM;
     wire [31:0] XUIMM;
 
-    assign XIDATA = XRES ? 0 : IDATA;
+    assign XIDATA = IDATAX;
 
-    assign XLUI   = XRES ? 0 : IDATA[6:0]==`LUI;
-    assign XAUIPC = XRES ? 0 : IDATA[6:0]==`AUIPC;
-    assign XJAL   = XRES ? 0 : IDATA[6:0]==`JAL;
-    assign XJALR  = XRES ? 0 : IDATA[6:0]==`JALR;
+    assign XLUI   = IDATAX[6:0]==`LUI;
+    assign XAUIPC = IDATAX[6:0]==`AUIPC;
+    assign XJAL   = IDATAX[6:0]==`JAL;
+    assign XJALR  = IDATAX[6:0]==`JALR;
 
-    assign XBCC   = XRES ? 0 : IDATA[6:0]==`BCC;
-    assign XLCC   = XRES ? 0 : IDATA[6:0]==`LCC;
-    assign XSCC   = XRES ? 0 : IDATA[6:0]==`SCC;
-    assign XMCC   = XRES ? 0 : IDATA[6:0]==`MCC;
+    assign XBCC   = IDATAX[6:0]==`BCC;
+    assign XLCC   = IDATAX[6:0]==`LCC;
+    assign XSCC   = IDATAX[6:0]==`SCC;
+    assign XMCC   = IDATAX[6:0]==`MCC;
 
-    assign XRCC   = XRES ? 0 : IDATA[6:0]==`RCC;
-    assign XCUS   = XRES ? 0 : IDATA[6:0]==`CUS;
-    //assign XFCC   <= XRES ? 0 : IDATA[6:0]==`FCC;
-    assign XCCC   = XRES ? 0 : IDATA[6:0]==`CCC;
+    assign XRCC   = IDATAX[6:0]==`RCC;
+    assign XCUS   = IDATAX[6:0]==`CUS;
+    //assign XFCC   <= IDATAX[6:0]==`FCC;
+    assign XSYS   = IDATAX[6:0]==`SYS;
 
-    // signal extended immediate, according to the instruction type:
+    // sign extended immediate, according to the instruction type:
 
-    assign XSIMM  = XRES ? 0 : 
-                     IDATA[6:0]==`SCC ? { IDATA[31] ? ALL1[31:12]:ALL0[31:12], IDATA[31:25],IDATA[11:7] } : // s-type
-                     IDATA[6:0]==`BCC ? { IDATA[31] ? ALL1[31:13]:ALL0[31:13], IDATA[31],IDATA[7],IDATA[30:25],IDATA[11:8],ALL0[0] } : // b-type
-                     IDATA[6:0]==`JAL ? { IDATA[31] ? ALL1[31:21]:ALL0[31:21], IDATA[31], IDATA[19:12], IDATA[20], IDATA[30:21], ALL0[0] } : // j-type
-                     IDATA[6:0]==`LUI||
-                     IDATA[6:0]==`AUIPC ? { IDATA[31:12], ALL0[11:0] } : // u-type
-                                          { IDATA[31] ? ALL1[31:12]:ALL0[31:12], IDATA[31:20] }; // i-type
-        // non-signal extended immediate, according to the instruction type:
+    assign XSIMM  = 
+                     IDATAX[6:0]==`SCC ? { IDATAX[31] ? ALL1[31:12]:ALL0[31:12], IDATAX[31:25],IDATAX[11:7] } : // s-type
+                     IDATAX[6:0]==`BCC ? { IDATAX[31] ? ALL1[31:13]:ALL0[31:13], IDATAX[31],IDATAX[7],IDATAX[30:25],IDATAX[11:8],ALL0[0] } : // b-type
+                     IDATAX[6:0]==`JAL ? { IDATAX[31] ? ALL1[31:21]:ALL0[31:21], IDATAX[31], IDATAX[19:12], IDATAX[20], IDATAX[30:21], ALL0[0] } : // j-type
+                     IDATAX[6:0]==`LUI||
+                     IDATAX[6:0]==`AUIPC ? { IDATAX[31:12], ALL0[11:0] } : // u-type
+                                          { IDATAX[31] ? ALL1[31:12]:ALL0[31:12], IDATAX[31:20] }; // i-type
+	
+    // zero-extended (unsigned) immediate, according to the instruction type:
 
-    assign XUIMM  = XRES ? 0: 
-                     IDATA[6:0]==`SCC ? { ALL0[31:12], IDATA[31:25],IDATA[11:7] } : // s-type
-                     IDATA[6:0]==`BCC ? { ALL0[31:13], IDATA[31],IDATA[7],IDATA[30:25],IDATA[11:8],ALL0[0] } : // b-type
-                     IDATA[6:0]==`JAL ? { ALL0[31:21], IDATA[31], IDATA[19:12], IDATA[20], IDATA[30:21], ALL0[0] } : // j-type
-                     IDATA[6:0]==`LUI||
-                     IDATA[6:0]==`AUIPC ? { IDATA[31:12], ALL0[11:0] } : // u-type
-                                          { ALL0[31:12], IDATA[31:20] }; // i-type
+    assign XUIMM  = 
+                     IDATAX[6:0]==`SCC ? { ALL0[31:12], IDATAX[31:25],IDATAX[11:7] } : // s-type
+                     IDATAX[6:0]==`BCC ? { ALL0[31:13], IDATAX[31],IDATAX[7],IDATAX[30:25],IDATAX[11:8],ALL0[0] } : // b-type
+                     IDATAX[6:0]==`JAL ? { ALL0[31:21], IDATAX[31], IDATAX[19:12], IDATAX[20], IDATAX[30:21], ALL0[0] } : // j-type
+                     IDATAX[6:0]==`LUI||
+                     IDATAX[6:0]==`AUIPC ? { IDATAX[31:12], ALL0[11:0] } : // u-type
+                                          { ALL0[31:12], IDATAX[31:20] }; // i-type
 
     reg FLUSH = -1;  // flush instruction pipeline
 
@@ -212,23 +223,23 @@ module darkriscv
 
         reg [`__THREADS__-1:0] RESMODE = -1;
 
-        wire [`__THREADS__+3:0] DPTR   = XRES ? { RESMODE, 4'd0 } : { XMODE, XIDATA[10: 7] }; // set SP_RESET when RES==1
-        wire [`__THREADS__+3:0] S1PTR  = { XMODE, XIDATA[18:15] };
-        wire [`__THREADS__+3:0] S2PTR  = { XMODE, XIDATA[23:20] };
+        wire [`__THREADS__+3:0] DPTR   = XRES ? { RESMODE, 4'd0 } : { TPTR, XIDATA[10: 7] }; // set SP_RESET when RES==1
+        wire [`__THREADS__+3:0] S1PTR  = { TPTR, XIDATA[18:15] };
+        wire [`__THREADS__+3:0] S2PTR  = { TPTR, XIDATA[23:20] };
     `else
         reg [`__THREADS__-1:0] RESMODE = -1;
 
-        wire [`__THREADS__+4:0] DPTR   = XRES ? { RESMODE, 5'd0 } : { XMODE, XIDATA[11: 7] }; // set SP_RESET when RES==1
-        wire [`__THREADS__+4:0] S1PTR  = { XMODE, XIDATA[19:15] };
-        wire [`__THREADS__+4:0] S2PTR  = { XMODE, XIDATA[24:20] };
+        wire [`__THREADS__+4:0] DPTR   = XRES ? { RESMODE, 5'd0 } : { TPTR, XIDATA[11: 7] }; // set SP_RESET when RES==1
+        wire [`__THREADS__+4:0] S1PTR  = { TPTR, XIDATA[19:15] };
+        wire [`__THREADS__+4:0] S2PTR  = { TPTR, XIDATA[24:20] };
     `endif
 `else
     `ifdef __RV32E__
-        wire [3:0] DPTR   = XRES ? 0 : XIDATA[10: 7]; // set SP_RESET when RES==1
+        wire [3:0] DPTR   = XIDATA[10: 7]; // set SP_RESET when RES==1
         wire [3:0] S1PTR  = XIDATA[18:15];
         wire [3:0] S2PTR  = XIDATA[23:20];
     `else
-        wire [4:0] DPTR   = XRES ? 0 : XIDATA[11: 7]; // set SP_RESET when RES==1
+        wire [4:0] DPTR   = XIDATA[11: 7]; // set SP_RESET when RES==1
         wire [4:0] S1PTR  = XIDATA[19:15];
         wire [4:0] S2PTR  = XIDATA[24:20];
     `endif
@@ -256,29 +267,19 @@ module darkriscv
     wire    RCC = FLUSH ? 0 : XRCC; // OPCODE==7'b0110011; //FCT3
     wire    CUS = FLUSH ? 0 : XCUS; // OPCODE==7'b0110011; //FCT3
     //wire    FCC = FLUSH ? 0 : XFCC; // OPCODE==7'b0001111; //FCT3
-    wire    CCC = FLUSH ? 0 : XCCC; // OPCODE==7'b1110011; //FCT3
+    wire    SYS = FLUSH ? 0 : XSYS; // OPCODE==7'b1110011; //FCT3
 
 `ifdef __THREADS__
     `ifdef __3STAGE__
         reg [31:0] NXPC2 [0:(2**`__THREADS__)-1];       // 32-bit program counter t+2
     `endif
-
-    `ifdef __RV32E__
-        reg [31:0] REGS [0:16*(2**`__THREADS__)-1];	// general-purpose 16x32-bit registers (s1)
-    `else
-        reg [31:0] REGS [0:32*(2**`__THREADS__)-1];	// general-purpose 32x32-bit registers (s1)
-    `endif
 `else
     `ifdef __3STAGE__
         reg [31:0] NXPC2;       // 32-bit program counter t+2
     `endif
-
-    `ifdef __RV32E__
-        reg [31:0] REGS [0:15];	// general-purpose 16x32-bit registers (s1)
-    `else
-        reg [31:0] REGS [0:31];	// general-purpose 32x32-bit registers (s1)
-    `endif
 `endif
+
+    reg [31:0] REGS [0:`RLEN-1];	// general-purpose 32x32-bit registers (s1)
 
     reg [31:0] NXPC;        // 32-bit program counter t+1
     reg [31:0] PC;		    // 32-bit program counter t+0
@@ -286,10 +287,10 @@ module darkriscv
 `ifdef SIMULATION
     integer i;
     
-    initial for(i=0;i!=16;i=i+1) REGS[i] = 0;
+    initial for(i=0;i!=`RLEN;i=i+1) REGS[i] = 0;
 `endif
 
-    // source-1 and source-1 register selection
+    // source-1 and source-2 register selection
 
     wire          [31:0] U1REG = REGS[S1PTR];
     wire          [31:0] U2REG = REGS[S2PTR];
@@ -300,58 +301,102 @@ module darkriscv
 
     // L-group of instructions (OPCODE==7'b0000011)
 
-`ifdef __FLEXBUZZ__
-
     wire [31:0] LDATA = FCT3[1:0]==0 ? { FCT3[2]==0&&DATAI[ 7] ? ALL1[31: 8]:ALL0[31: 8] , DATAI[ 7: 0] } :
                         FCT3[1:0]==1 ? { FCT3[2]==0&&DATAI[15] ? ALL1[31:16]:ALL0[31:16] , DATAI[15: 0] } :
                                         DATAI;
-`else
-    wire [31:0] LDATA = FCT3==0||FCT3==4 ? ( DADDR[1:0]==3 ? { FCT3==0&&DATAI[31] ? ALL1[31: 8]:ALL0[31: 8] , DATAI[31:24] } :
-                                             DADDR[1:0]==2 ? { FCT3==0&&DATAI[23] ? ALL1[31: 8]:ALL0[31: 8] , DATAI[23:16] } :
-                                             DADDR[1:0]==1 ? { FCT3==0&&DATAI[15] ? ALL1[31: 8]:ALL0[31: 8] , DATAI[15: 8] } :
-                                                             { FCT3==0&&DATAI[ 7] ? ALL1[31: 8]:ALL0[31: 8] , DATAI[ 7: 0] } ):
-                        FCT3==1||FCT3==5 ? ( DADDR[1]==1   ? { FCT3==1&&DATAI[31] ? ALL1[31:16]:ALL0[31:16] , DATAI[31:16] } :
-                                                             { FCT3==1&&DATAI[15] ? ALL1[31:16]:ALL0[31:16] , DATAI[15: 0] } ) :
-                                             DATAI;
-`endif
-
-    // S-group of instructions (OPCODE==7'b0100011)
-
-`ifdef __FLEXBUZZ__
-
-    wire [31:0] SDATA = U2REG; /* FCT3==0 ? { ALL0 [31: 8], U2REG[ 7:0] } :
-                        FCT3==1 ? { ALL0 [31:16], U2REG[15:0] } :
-                                    U2REG;*/
-`else
-    wire [31:0] SDATA = FCT3==0 ? ( DADDR[1:0]==3 ? { U2REG[ 7: 0], ALL0 [23:0] } :
-                                    DADDR[1:0]==2 ? { ALL0 [31:24], U2REG[ 7:0], ALL0[15:0] } :
-                                    DADDR[1:0]==1 ? { ALL0 [31:16], U2REG[ 7:0], ALL0[7:0] } :
-                                                    { ALL0 [31: 8], U2REG[ 7:0] } ) :
-                        FCT3==1 ? ( DADDR[1]==1   ? { U2REG[15: 0], ALL0 [15:0] } :
-                                                    { ALL0 [31:16], U2REG[15:0] } ) :
-                                    U2REG;
-`endif
 
     // C-group: CSRRW
 
-`ifdef __INTERRUPT__
+    wire EBRK = SYS && FCT3==0 && XIDATA[31:20]==12'b000000000001; // ebreak always decodable, for simulation
 
-    reg [31:0] MEPC  = 0;
-    reg [31:0] MTVEC = 0;
-    reg        MIE   = 0;
-    reg        MIP   = 0;
+    // exceptions
 
-    wire [31:0] CDATA = XIDATA[31:20]==12'h344 ? MIP  : // machine interrupt pending
-                        XIDATA[31:20]==12'h304 ? MIE   : // machine interrupt enable
-                        XIDATA[31:20]==12'h341 ? MEPC  : // machine exception PC
-                        XIDATA[31:20]==12'h305 ? MTVEC : // machine vector table
+    wire IERR = FLUSH ? 0 : !(XLUI||XAUIPC||XJAL||XJALR||XBCC||XLCC||XSCC||XMCC||XRCC||XCUS||XSYS);
+
+    wire DBER = BERR&&(DRD||DWR);
+    wire IBER = BERR&&!(DRD||DWR);
+    wire DAER = DLEN==2 ? DADDR[0]!=0 : DLEN==4 ? DADDR[1:0]!=0 : 0;
+    wire IAER = IADDR[1:0]!=0;
+
+`ifdef __CSR__
+
+    wire CSRX  = SYS && FCT3[1:0];
+
+    `ifdef __INTERRUPT__
+        reg [31:0] MSTATUS  = 0;
+        reg [31:0] MSCRATCH = 0;
+        reg [31:0] MCAUSE   = 0;
+        reg [31:0] MEPC     = 0;
+        reg [31:0] MTVEC    = 0;
+        reg [31:0] MIE      = 0;
+        reg [31:0] MIP      = 0;
+
+        wire MRET = SYS && FCT3==0 && XIDATA[31:20]==12'b001100000010;
+    `endif
+
+    `ifdef __EBREAK__
+        reg [31:0] SSTATUS  = 0;
+        reg [31:0] SSCRATCH = 0;
+        reg [31:0] SCAUSE   = 0;
+        reg [31:0] SEPC     = 0;
+        reg [31:0] STVEC    = 0;
+        reg [31:0] SIE      = 0;
+        reg [31:0] SIP      = 0;
+
+        wire SRET = SYS && FCT3==0 && XIDATA[31:20]==12'b000100000010;
+    `endif
+
+    `ifdef __CSR_ESSENTIAL__
+		reg [63:0] CSRCLK = 0;
+		reg [63:0] CSRINS = 0;
+		always@(posedge CLK)
+		begin
+			if(!XRES)
+			begin
+				CSRCLK = CSRCLK+1;
+				if(!HLT & !(|FLUSH))
+					CSRINS = CSRINS+1;
+			end
+		end
+    `endif
+
+    wire [31:0] CRDATA = 
+    `ifdef __THREADS__    
+                        XIDATA[31:20]==12'hf14 ? { CPTR, TPTR } : // core/thread number
+    `else
+                        XIDATA[31:20]==12'hf14 ? CPTR  : // core number
+    `endif    
+    `ifdef __INTERRUPT__
+                        XIDATA[31:20]==12'h344 ? MIP      : // machine interrupt pending
+                        XIDATA[31:20]==12'h304 ? MIE      : // machine interrupt enable
+                        XIDATA[31:20]==12'h341 ? MEPC     : // machine exception PC
+                        XIDATA[31:20]==12'h342 ? MCAUSE   : // machine expection cause
+                        XIDATA[31:20]==12'h305 ? MTVEC    : // machine vector table
+                        XIDATA[31:20]==12'h300 ? MSTATUS  : // machine status
+                        XIDATA[31:20]==12'h340 ? MSCRATCH : // machine status
+    `endif
+    `ifdef __EBREAK__
+                        XIDATA[31:20]==12'h144 ? SIP      : // machine interrupt pending
+                        XIDATA[31:20]==12'h104 ? SIE      : // machine interrupt enable
+                        XIDATA[31:20]==12'h141 ? SEPC     : // machine exception PC
+                        XIDATA[31:20]==12'h142 ? SCAUSE   : // machine expection cause
+                        XIDATA[31:20]==12'h105 ? STVEC    : // machine vector table
+                        XIDATA[31:20]==12'h100 ? SSTATUS  : // machine status
+                        XIDATA[31:20]==12'h140 ? SSCRATCH : // machine status
+    `endif
+    `ifdef __CSR_ESSENTIAL__
+						XIDATA[31:20]==12'hC00 ? CSRCLK[31:0]  :
+						XIDATA[31:20]==12'hC02 ? CSRINS[31:0]  :
+						XIDATA[31:20]==12'hC80 ? CSRCLK[63:32] :
+						XIDATA[31:20]==12'hC82 ? CSRINS[63:32] :
+    `endif
                                                  0;	 // unknown
 
-    wire MRET = CCC && FCT3==0 && S2PTR==2;
-    wire CSRW = CCC && FCT3==1;
-    wire CSRR = CCC && FCT3==2;
+    wire [31:0] WRDATA = FCT3[1:0]==3 ? (CRDATA & ~CRMASK) : FCT3[1:0]==2 ? (CRDATA | CRMASK) : CRMASK;
+    wire [31:0] CRMASK = FCT3[2] ? XIDATA[19:15] : U1REG;
+   
 `endif
-    wire EBRK = CCC && FCT3==0 && S2PTR==1;
+
 
     // RM-group of instructions (OPCODEs==7'b0010011/7'b0110011), merged! src=immediate(M)/register(R)
 
@@ -364,13 +409,13 @@ module darkriscv
                          FCT3==3 ? U1REG<U2REGX : // unsigned
                          FCT3==2 ? S1REG<S2REGX : // signed
                          FCT3==0 ? (XRCC&&FCT7[5] ? U1REG-S2REGX : U1REG+S2REGX) :
-                         FCT3==1 ? U1REG<<U2REGX[4:0] :
+                         FCT3==1 ? S1REG<<U2REGX[4:0] :
                          //FCT3==5 ?
-                         !FCT7[5] ? U1REG>>U2REGX[4:0] :
+                         !FCT7[5] ? S1REG>>U2REGX[4:0] :
 `ifdef MODEL_TECH
-                                   -((-U1REG)>>U2REGX[4:0]); // workaround for modelsim
+                                   -((-S1REG)>>U2REGX[4:0]); // workaround for modelsim
 `else
-                                   $signed(U1REG>>>U2REGX[4:0]);  // (FCT7[5] ? U1REG>>>U2REG[4:0] :
+                                   $signed(S1REG>>>U2REGX[4:0]);  // (FCT7[5] ? U1REG>>>U2REG[4:0] :
 `endif
 
 `ifdef __MAC16X16__
@@ -416,54 +461,125 @@ module darkriscv
 `ifdef __3STAGE__
 	    FLUSH <= XRES ? 2 : HLT ? FLUSH :        // reset and halt
 	                       FLUSH ? FLUSH-1 :
-    `ifdef __INTERRUPT__
-                            MRET ? 2 :
+    `ifdef __EBREAK__
+          IERR||DBER||IBER||IAER||DAER ? 2 : // misc errors
+                                  EBRK ? 2 : // ebreak jmps to system level, i.e. sepc = PC; PC = stvec
+                                  SRET ? 2 : // sret returns from system level, i.e. PC = sepc
     `endif
+    `ifdef __INTERRUPT__
+                            MRET ? 2 : // mret returns from interrupt, i.e. PC = mepc
+    `endif
+
 	                       JREQ ? 2 : 0;  // flush the pipeline!
 `else
         FLUSH <= XRES ? 1 : HLT ? FLUSH :        // reset and halt
                        JREQ;  // flush the pipeline!
 `endif
+
 `ifdef __INTERRUPT__
+
+    `ifdef __EBREAK__
+        MIP[11] <= IRQ&&MSTATUS[3]&&MIE[11]&&!SIP[1];
+    `else
+        MIP[11] <= IRQ&&MSTATUS[3]&&MIE[11];
+    `endif
+    
         if(XRES)
         begin
-            MTVEC <= 0;
-            MEPC  <= 0;
-            MIP   <= 0;
-            MIE   <= 0;
+            MTVEC    <= 0;
+            MEPC     <= 0;
+            MIE      <= 0;
+            MCAUSE   <= 0;
+            MSTATUS  <= 0;
+            MSCRATCH <= 0;
         end
         else
-        if(MIP&&MIE&&JREQ)
+        if(!HLT && !FLUSH)
         begin
-            MEPC <= JVAL;
-            MIP  <= 1;
-            MIE  <= 0;
-        end
-        else
-        if(CSRW)
-        begin
-            case(XIDATA[31:20])
-                12'h305: MTVEC <= U1REG;
-                12'h341: MEPC  <= U1REG;
-                12'h304: MIE   <= U1REG;
-            endcase
-        end
-        else
-        if(MRET)
-        begin
-            MIP <= 0;
-            MIE <= 1;
-        end
-        else
-        if(INT==1&&MIE==1)
-        begin
-            MIP <= 1;
+            if(CSRX)
+            begin
+                case(XIDATA[31:20])
+                    12'h300: MSTATUS  <= WRDATA;
+                    12'h340: MSCRATCH <= WRDATA;
+                    12'h305: MTVEC    <= WRDATA;
+                    12'h341: MEPC     <= WRDATA;
+                    12'h304: MIE      <= WRDATA;
+                endcase
+            end
+            else
+            if(MIP[11] && JREQ)
+            begin
+                MEPC   <= JVAL;             // interrupt saves the next PC!
+                MSTATUS[3] <= 0;            // no interrupts when handling ebreak!
+                MSTATUS[7] <= MSTATUS[3];   // copy old MIE bit
+                MCAUSE <= 32'h8000000b;     // ext interrupt
+            end
+            else
+            if(MRET)
+            begin
+                MSTATUS[3] <= MSTATUS[7]; // return last MIE bit
+            end
         end
 `endif
+
+`ifdef __EBREAK__
+   
+        if(XRES)
+        begin
+            STVEC    <= 0;
+            SEPC     <= 0;
+            SIE      <= 0;
+            SIP      <= 0;
+            SCAUSE   <= 0;
+            SSTATUS  <= 0;
+            SSCRATCH <= 0;
+        end
+        else
+        if(!HLT||!FLUSH)
+        begin
+            if(IAER||IBER||IERR||EBRK||DAER||DBER) // ebreak cannot be blocked!
+            begin
+                SEPC   <= PC;               // ebreak saves the current PC!
+                SSTATUS[1] <= 0;            // no interrupts when handling ebreak!
+                SSTATUS[5] <= SSTATUS[1];   // copy old MIE bit
+                
+                SCAUSE <=      IAER ? 32'd0 :
+                               IBER ? 32'd1 :
+                               IERR ? 32'd2 :
+                               EBRK ? 32'd3 : 
+                          DAER&&DRD ? 32'd4 :
+                          DBER&&DRD ? 32'd5 :
+                          DAER&&DWR ? 32'd6 :
+                          DBER&&DWR ? 32'd7 :
+                                    -1;
+                          
+                SIP[1] <= 1;                // set when ebreak!
+            end
+            else
+            if(CSRX)
+            begin
+                case(XIDATA[31:20])
+                    12'h100: SSTATUS  <= WRDATA;
+                    12'h140: SSCRATCH <= WRDATA;
+                    12'h105: STVEC    <= WRDATA;
+                    12'h141: SEPC     <= WRDATA;
+                    12'h104: SIE      <= WRDATA;
+                endcase
+            end
+            else
+            if(SRET)
+            begin
+                SSTATUS[3] <= SSTATUS[7]; // return last MIE bit
+                SIP[1] <= 0;              //return from ebreak
+            end
+        end
+        
+`endif
+
 `ifdef __RV32E__
-        REGS[DPTR] <=   XRES||DPTR[3:0]==0 ? 0  :        // reset sp
+        REGS[DPTR] <=   XRES||DPTR[3:0]==0 ? 0  :        // reset x0
 `else
-        REGS[DPTR] <=   XRES||DPTR[4:0]==0 ? 0  :        // reset sp
+        REGS[DPTR] <=   XRES||DPTR[4:0]==0 ? 0  :        // reset x0
 `endif
                        HLT ? REGS[DPTR] :        // halt
                        LCC ? LDATA :
@@ -476,8 +592,8 @@ module darkriscv
 `ifdef __MAC16X16__
                        MAC ? REGS[DPTR]+KDATA :
 `endif
-`ifdef __INTERRUPT__
-                       CSRR ? CDATA :
+`ifdef __CSR__
+                       CSRX ? CRDATA :
 `endif
                              REGS[DPTR];
 
@@ -485,24 +601,35 @@ module darkriscv
 
     `ifdef __THREADS__
 
-        NXPC <= /*XRES ? `__RESETPC__ :*/ HLT ? NXPC : NXPC2[XMODE];
+        NXPC <= /*XRES ? `__RESETPC__ :*/ HLT ? NXPC : NXPC2[TPTR];
 
-        NXPC2[XRES ? RESMODE : XMODE] <=  XRES ? `__RESETPC__ : HLT ? NXPC2[XMODE] :   // reset and halt
+        NXPC2[XRES ? RESMODE : TPTR] <=  XRES ? `__RESETPC__ : HLT ? NXPC2[TPTR] :   // reset and halt
                                       JREQ ? JVAL :                            // jmp/bra
-	                                         NXPC2[XMODE]+4;                   // normal flow
+	                                         NXPC2[TPTR]+4;                   // normal flow
 
-        XMODE <= XRES ? 0 : HLT ? XMODE :        // reset and halt
-                            /*JAL*/ JREQ ? XMODE+1 : XMODE;
-	             //XMODE==0/*&& IREQ*/&&JREQ ? 1 :         // wait pipeflush to switch to irq
-                 //XMODE==1/*&&!IREQ*/&&JREQ ? 0 : XMODE;  // wait pipeflush to return from irq
+        TPTR <= XRES ? 0 : HLT ? TPTR :        // reset and halt
+                            JAL /*JREQ*/ ? TPTR+1 : TPTR;
+	             //TPTR==0/*&& IREQ*/&&JREQ ? 1 :         // wait pipeflush to switch to irq
+                 //TPTR==1/*&&!IREQ*/&&JREQ ? 0 : TPTR;  // wait pipeflush to return from irq
 
     `else
         NXPC <= /*XRES ? `__RESETPC__ :*/ HLT ? NXPC : NXPC2;
 
 	    NXPC2 <=  XRES ? `__RESETPC__ : HLT ? NXPC2 :   // reset and halt
+        `ifdef __EBREAK__
+                     SRET ? SEPC :  // return from system call
+                     STVEC&&
+                     (IAER||
+                     IBER||
+                     IERR||
+                     EBRK||
+                     DAER||
+                     DBER) ? STVEC : // ebreak causes an system call                     
+        `endif
+
         `ifdef __INTERRUPT__
-                     MRET ? MEPC :
-                    MIE&&MIP&&JREQ ? MTVEC : // pending interrupt + pipeline flush
+                     MRET ? MEPC :  // return from interrupt
+                    MIP[11]&&JREQ ? MTVEC : // pending interrupt + pipeline flush
         `endif
 	                 JREQ ? JVAL :                    // jmp/bra
 	                        NXPC2+4;                   // normal flow
@@ -511,77 +638,186 @@ module darkriscv
 
 `else
         NXPC <= XRES ? `__RESETPC__ : HLT ? NXPC :   // reset and halt
+        
+        `ifdef __EBREAK__
+                     MRET ? MEPC :
+                     EBRK ? MTVEC : // ebreak causes an interrupt
+        `endif
         `ifdef __INTERRUPT__
                      MRET ? MEPC :
-                    MIE&&MIP&&JREQ ? MTVEC : // pending interrupt + pipeline flush
+                    MIP[11]&&JREQ ? MTVEC : // pending interrupt + pipeline flush
         `endif
               JREQ ? JVAL :                   // jmp/bra
                      NXPC+4;                   // normal flow
 `endif
         PC   <= /*XRES ? `__RESETPC__ :*/ HLT ? PC : NXPC; // current program counter
-
-`ifndef __YOSYS__
-
-        if(EBRK)
-        begin
-            $display("breakpoint at %x",PC);
-            $stop();
-        end
-        
-        if(!FLUSH && IDATA===32'dx)
-        begin
-            $display("invalid IDATA at %x",PC);
-            $stop();  
-        end
-        
-        if(LCC && !HLT && DATAI===32'dx)
-        begin
-            $display("invalid DATAI@%x at %x",DADDR,PC);
-            $stop();
-        end
-`endif
-
     end
 
     // IO and memory interface
 
-    assign DATAO = SDATA; // SCC ? SDATA : 0;
-    assign DADDR = U1REG + SIMM; // (SCC||LCC) ? U1REG + SIMM : 0;
+    assign DATAO = U2REG;
+    assign DADDR = U1REG + SIMM;
 
     // based in the Scc and Lcc
 
-`ifdef __FLEXBUZZ__
-    assign RW      = !SCC;
-    assign DLEN[0] = (SCC||LCC)&&FCT3[1:0]==0;
-    assign DLEN[1] = (SCC||LCC)&&FCT3[1:0]==1;
-    assign DLEN[2] = (SCC||LCC)&&FCT3[1:0]==2;
-`else
-    assign RD = LCC;
-    assign WR = SCC;
-    assign BE = FCT3==0||FCT3==4 ? ( DADDR[1:0]==3 ? 4'b1000 : // sb/lb
-                                     DADDR[1:0]==2 ? 4'b0100 :
-                                     DADDR[1:0]==1 ? 4'b0010 :
-                                                     4'b0001 ) :
-                FCT3==1||FCT3==5 ? ( DADDR[1]==1   ? 4'b1100 : // sh/lh
-                                                     4'b0011 ) :
-                                                     4'b1111; // sw/lw
-`endif
+    assign DRW      = !SCC;
+    assign DLEN[0] = (SCC||LCC)&&FCT3[1:0]==0; // byte
+    assign DLEN[1] = (SCC||LCC)&&FCT3[1:0]==1; // word
+    assign DLEN[2] = (SCC||LCC)&&FCT3[1:0]==2; // long
+
+    assign DWR     = SCC;
+    assign DRD     = LCC;
+    assign DAS     = SCC||LCC;
 
 `ifdef __3STAGE__
     `ifdef __THREADS__
-        assign IADDR = NXPC2[XMODE];
+        assign IADDR = NXPC2[TPTR];
     `else
         assign IADDR = NXPC2;
     `endif
 `else
     assign IADDR = NXPC;
 `endif
-
-    assign IDLE = |FLUSH;
+    
 `ifdef __INTERRUPT__
-    assign DEBUG = { INT, MIP, MIE, MRET };
+    assign DEBUG = { IRQ, MIP, MIE, MRET };
 `else
-    assign DEBUG = { XRES, IDLE, SCC, LCC };
+    assign DEBUG = { XRES, |FLUSH, SCC, LCC };
+`endif
+
+`ifdef SIMULATION
+
+    `ifdef __PERFMETER__
+
+        integer clocks=0, running=0, load=0, store=0, flush=0, halt=0;
+
+    `ifdef __THREADS__
+        integer thread[0:(2**`__THREADS__)-1],curtptr=0,cnttptr=0;
+        integer j;
+
+        initial for(j=0;j!=(2**`__THREADS__);j=j+1) thread[j] = 0;
+    `endif
+
+        always@(posedge CLK)
+        begin
+            if(!XRES)
+            begin
+                clocks = clocks+1;
+
+                if(HLT)
+                begin
+                         if(SCC)	store = store+1;
+                    else if(LCC)	load  = load +1;
+                    else 		halt  = halt +1;
+                end
+                else
+                if(|FLUSH)
+                begin
+                    flush=flush+1;
+                end
+                else
+                begin
+
+        `ifdef __THREADS__
+                    for(j=0;j!=(2**`__THREADS__);j=j+1)
+                            thread[j] = thread[j]+(j==TPTR?1:0);
+
+                    if(TPTR!=curtptr)
+                    begin
+                        curtptr = TPTR;
+                        cnttptr = cnttptr+1;
+                    end
+        `endif
+                    running = running +1;
+                end
+
+                if(ESIMREQ)
+                begin
+                    $display("****************************************************************************");
+                    $display("DarkRISCV Pipeline Report (%0d clocks, %0d instr, CPI = %.2f):",
+                        clocks,running,1.0*clocks/running);
+
+                    $display("core%0d: %0d%% run, %0d%% wait (%0d%% i-bus, %0d%% d-bus/rd, %0d%% d-bus/wr), %0d%% flush",
+                        CPTR,
+                        100.0*running/clocks,
+                        100.0*(load+store+halt)/clocks,
+                        100.0*halt/clocks,
+                        100.0*load/clocks,
+                        100.0*store/clocks,
+                        100.0*flush/clocks);
+
+         `ifdef __THREADS__
+                    for(j=0;j!=(2**`__THREADS__);j=j+1) $display("  thread%0d: %0d%% running",j,100.0*thread[j]/clocks);
+
+                    $display("%0d thread switches, %0d clocks/threads",cnttptr,clocks/cnttptr);
+         `endif
+                    $display("****************************************************************************");
+                    $finish();
+                end
+            end
+        `ifndef __EBREAK__
+            if(!HLT&&!FLUSH&&EBRK)
+            begin
+                $display("breakpoint at %x",PC);
+                $stop();
+            end
+        `endif        
+            if(!HLT && !FLUSH && (XIDATA===32'dx || XIDATA[6:0]==0))
+            begin
+                $display("invalid XIDATA=%x at %x %s",XIDATA,PC,XIDATA[6:0]==0?"(check for ENDIAN on rtl/config.vh and src/config.mk)":"");
+                $finish();  
+            end
+            
+            if(LCC&&!HLT&&!FLUSH&&( (DLEN==4 && DATAI[31:0]===32'dx)||
+                                    (DLEN==2 && DATAI[15:0]===16'dx)||
+                                    (DLEN==1 && DATAI[ 7:0]=== 8'dx)))
+            begin
+                $display("invalid DATAI@%x at %x",DADDR,PC);
+                $finish();
+            end
+            
+        `ifdef __TRACE__
+            if(!XRES)
+            begin
+            `ifdef __TRACEFULL__
+                if(FLUSH)
+                    $display("trace: %x:%x       flushed",PC,XIDATA);
+                else
+                if(HLT)
+                begin
+                    //$display("%x:%x       %s halted       %x:%x",PC,XIDATA,LCC?"lx":"sx",DADDR,LCC?LDATA:DATAO);
+                    $display("trace: %x:%x       halted",PC,XIDATA);
+                end
+                else
+            `else
+                if(!FLUSH && !HLT)
+            `endif
+                begin
+                    case(XIDATA[6:0])
+                        `LUI:     $display("trace: %x:%x lui   %%x%0x,%0x",                PC,XIDATA,DPTR,$signed(SIMM));
+                        `AUIPC:   $display("trace: %x:%x auipc %%x%0x,PC[%0x]",            PC,XIDATA,DPTR,$signed(SIMM));
+                        `JAL:     $display("trace: %x:%x jal   %%x%0x,%0x",                PC,XIDATA,DPTR,$signed(SIMM));
+                        `JALR:    $display("trace: %x:%x jalr  %%x%0x,%%x%0x,%0d",         PC,XIDATA,DPTR,S1PTR,$signed(SIMM));
+                        `BCC:     $display("trace: %x:%x bcc   %%x%0x,%%x%0x,PC[%0d]",     PC,XIDATA,S1PTR,S2PTR,$signed(SIMM));
+                        `LCC:     $display("trace: %x:%x lx    %%x%0x,%%x%0x[%0d]\t%x:%x",  PC,XIDATA,DPTR,S1PTR,$signed(SIMM),DADDR,LDATA);
+                        `SCC:     $display("trace: %x:%x sx    %%x%0x,%%x%0x[%0d]\t%x:%x",  PC,XIDATA,DPTR,S1PTR,$signed(SIMM),DADDR,DATAO);
+                        `MCC:     $display("trace: %x:%x alui  %%x%0x,%%x%0x,%0d",         PC,XIDATA,DPTR,S1PTR,$signed(SIMM));
+                        `RCC:     $display("trace: %x:%x alu   %%x%0x,%%x%0x,%%x%0x",      PC,XIDATA,DPTR,S1PTR,S2PTR);
+                        `SYS:     $display("trace: %x:%x sys   (no decode)",               PC,XIDATA);
+                        `CUS:     $display("trace: %x:%x cus   (no decode)",               PC,XIDATA);
+                        default:  $display("trace: %x:%x ???   (no decode)",               PC,XIDATA);
+                    endcase
+                end
+            end        
+        `endif
+        
+        end
+
+    `else
+        always@(posedge CLK) if(ESIMREQ) ESIMACK <= 1;
+    `endif
+
+
 `endif
 
 endmodule

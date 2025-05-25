@@ -30,21 +30,71 @@
 
 #include <io.h>
 #include <stdio.h>
+#include <string.h>
+#include <math.h>
+
+unsigned csr_test(unsigned,unsigned,unsigned);
 
 int main(void)
 {
-    unsigned mtvec=0;
+    unsigned t=0,t0=0;
 
-    printf("board: %s (id=%d)\n",board_name(io.board_id),io.board_id);
+    printf("boot0: main@%x stack@%x\n",(unsigned)main,(unsigned)&t);
+
+#ifdef SDRAM
+
+    static int sdram_init = 1;
+
+    if(sdram_init)
+    {
+        unsigned *sdram = (unsigned *)0x80000000;
+
+        sdram_init = 0;
+
+        if(*sdram!=0xdeadbeef)
+        {    
+            char *ptr,*d=(char *)0x80000000,*s=(char *)0x0;        
+
+            printf("sdrm0: preparing SDRAM memory %d bytes...\n",(unsigned)&_edata);
+
+            memcpy(d,s,(unsigned)&_edata);
+    
+            printf("sdrm0: checking SDRAM memory %d bytes...\n",(unsigned)&_edata);
+    
+            ptr=memcmp(d,s,(unsigned)&_edata);
+        
+            if(ptr)
+            { 
+                printf("sdrm0: test failed at %x:%x\n",ptr,*(unsigned *)ptr);
+            }
+            else
+            {
+                printf("sdrm0: SDRAM done, rebooting...\n");
+                reboot(0x80000200,0x80008000);
+            }
+        }
+    }
+
+#endif
+
+    io->irq = IRQ_TIMR; // clear interrupts
+    utimers = 0;
+
+    printf("board: %s (id=%d)\n",board_name(io->board_id),io->board_id);
     printf("build: %s for %s\n",BUILD,ARCH);
+    
+    printf("core%d: ",              io->core_id);               // core id
+    printf("darkriscv@%dMHz ",      io->board_cm*2);            // board clock MHz
+    printf("rv32%s ",               check4rv32i()?"i":"e");     // architecture
 
-    printf("core%d: ",              io.core_id);                 // core id
-    printf("darkriscv@%dMHz w/ ",io.board_cm*2);              // board clock MHz
-    printf("rv32%s ",               check4rv32i()?"i":"e");      // architecture
-    if(mac(1000,16,16)==1256)       printf("MAC ");              // MAC support
+    printf((mac(1000,16,16)==1256)?"mac ":"");                  // MAC support
+
+    printf((*(char *)(int[]){1})?"little-endian ":             // endian
+                                 "big-endian ");
+
     printf("\n");
 
-    printf("bram0: text@%d+%d data@%d+%d stack@%d\n",
+    printf("bram0: text@%x+%x data@%x+%x stack@%x\n",
         (unsigned)&_text, (unsigned)&_etext-(unsigned)&_text,
         (unsigned)&_data, (unsigned)&_edata-(unsigned)&_data,
         (unsigned)&_stack);
@@ -54,57 +104,114 @@ int main(void)
 
     _edata = 0xdeadbeef;
 
-    printf("uart0: 115.2kbps (div=%d)\n",io.uart.baud);
-    printf("timr0: %dHz (div=%d)\n",(io.board_cm*2000000u)/(io.timer+1),io.timer);
+    printf("uart0: 115.2kbps (div=%d)\n",bswap16(io->uart.baud));
+    printf("timr0: %dHz (div=%d)\n",(io->board_cm*2000000u)/(io->timer+1),io->timer);
+
+#if 0
+
+    // led test code! :)
+
+    printf("*** led=%x\n",io->led);
+    
+    io->led  = 0x5555aaaa;
+
+    printf("*** led=%x\n",io->led);
+
+    volatile char *p = (char *)&io->led;
+
+    p[0] = 0;
+    p[1] = 1;
+    p[2] = 2;
+    p[3] = 3;
+    
+    printf("*** led=%x\n",io->led);
+
+#endif
+
+    void *mtvec=0;
+    void *stvec=0;
 
 #ifndef SMALL
 
+    int csr = csr_test(0xFFFF0000,0xFFFF,0x00FFFF00);
+    
+    if(csr) printf("csrxx: csr_test=%x\n",csr);
+    else    printf("csrxx: not found\n");
+
+    set_stvec(dbg_handler);
+    
+    stvec = get_stvec();
+    
+    if(stvec)
+        printf("stvec: handler@%x, debug enabled...\n",stvec);
+    else
+        printf("stvec: not found\n");
+
     set_mtvec(irq_handler);
+
+    // simulate a 32-bit load in a invalid address
+
+    if(stvec)
+    {
+        asm("   ebreak;     \
+                li t0,1;    \
+                lw t0,0(t0);");
+    }
 
     mtvec = get_mtvec();
 
     if(mtvec)
     {
-        printf("mtvec: handler@%d, enabling interrupts...\n",mtvec);
-        set_mie(1);
+        printf("mtvec: handler@%x, enabling interrupts...\n",mtvec);
+
+        set_mie((1<<11)|get_mie());
+        set_mstatus((1<<3)|get_mstatus());
+
         printf("mtvec: interrupts enabled!\n");
     }
     else
-        printf("mtvec: not found (polling only)\n");
+        printf("mtvec: not found (polling)\n");
 
 #endif
-
-    io.irq = IRQ_TIMR; // clear interrupts
-    utimers = 0;
-
+    
     printf("\n");
 
-    printf("Welcome to DarkRISCV!\n");
+    printf("Welcome to DarkRISCV!\n\n");
+/*
+    // performance counter test!
+    
+    int cycle = get_mcycle();
+    int instr = get_minstret();
 
+    printf("boot c=%d i=%d CPI=%d.%d\n",cycle,instr,cycle/instr,(cycle*1000/instr)%1000);
+*/
     // main loop
 
     while(1)
     {
         char  buffer[32];
 
-        printf("> ");
         memset(buffer,0,sizeof(buffer));
+
+        t = io->timeus;
+        
+        printf("%d> ",t-t0);
 
         if(mtvec==0)
         {
             while(1)
             {
-                if(io.irq&IRQ_TIMR)
+                if(io->irq==IRQ_TIMR)
                 {
                     if(!utimers--)
                     {
-                        io.led++;
+                        io->led++;
                         utimers=999999;
                     }
-                    io.irq = IRQ_TIMR;
+                    io->irq = IRQ_TIMR;
                 }
 
-                if(io.uart.stat&2)
+                if(io->uart.stat&2)
                 {
                     break;
                 }
@@ -113,12 +220,14 @@ int main(void)
 
         gets(buffer,sizeof(buffer));
 
+        t0 = io->timeus;
+
 #ifdef SMALL
 
         if(!strcmp(buffer,"led"))
         {
             printf("led flip!\n");
-            io.led = ~io.led;
+            io->led = ~io->led;
         }
         else
         if(!strcmp(buffer,"reboot"))
@@ -146,11 +255,21 @@ int main(void)
               printf("\33[H\33[2J");
           }
           else
+          if(!strcmp(argv[0],"stop"))
+          {
+              EBREAK;
+          }
+          else
           if(!strcmp(argv[0],"reboot"))
           {
               set_mie(0);
               printf("mtvec: interrupts disabled!\n");
               printf("rebooting...\n");
+
+              if(argv[1])
+              {
+                  reboot(xtoi(argv[1]),xtoi(argv[1])+0x2000);
+              }
 
               return 0;
           }
@@ -173,7 +292,7 @@ int main(void)
               }
           }
           else
-          if(0) // if(!strncmp(argv[0],"rd",2)||!strncmp(argv[0],"wr",2))
+          if(!strncmp(argv[0],"rd",2)||!strncmp(argv[0],"wr",2))
           {
               int kp = 2,
                   i = 1,j,k,w,
@@ -208,23 +327,28 @@ int main(void)
           else
           if(!strcmp(argv[0],"led"))
           {
-              if(argv[1]) io.led = xtoi(argv[1]);
+              if(argv[1]) io->led = xtoi(argv[1]);
 
-              printf("led = %x\n",io.led);
+              printf("led = %x\n",io->led);
           }
           else
           if(!strcmp(argv[0],"timer"))
           {
-              if(argv[1]) io.timer = atoi(argv[1]);
+              if(argv[1]) io->timer = atoi(argv[1]);
 
-              printf("timer = %d\n",io.timer);
+              printf("timer = %d\n",io->timer);
           }
           else
-          if(!strcmp(argv[0],"gpio"))
+          if(!strcmp(argv[0],"oport"))
           {
-              if(argv[1]) io.gpio = xtoi(argv[1]);
+              if(argv[1]) io->oport = xtoi(argv[1]);
 
-              printf("gpio = %x\n",io.gpio);
+              printf("oport = %x\n",io->oport);
+          }
+          else
+          if(!strcmp(argv[0],"iport"))
+          {
+              printf("iport = %x\n",io->iport);
           }
           else
           if(!strcmp(argv[0],"mul"))
@@ -261,10 +385,10 @@ int main(void)
           if(argv[0][0])
           {
               printf("command: [%s] not found.\n"
-                     "valid commands: clear, dump [hex], led [hex], timer [dec], gpio [hex]\n"
+                     "valid commands: clear, dump [hex], led [hex], timer [dec], oport [hex]\n"
                      "                mul [dec] [dec], div [dec] [dec], mac [dec] [dec] [dec]\n"
                      "                reboot, wr[m][bwl] [hex] [hex] [[hex] when m],\n"
-                     "                rd[m][bwl] [hex] [[hex] when m]\n",
+                     "                rd[m][bwl] [hex] [[hex] when m], iport\n",
                      argv[0]);
           }
 

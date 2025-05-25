@@ -30,6 +30,12 @@
 
 //`timescale 1ns / 1ps
 
+// to port to a new board, use TESTMODE to test:
+// - the reset button is working
+// - the LED is blinking at 1Hz
+// - the UART is looped
+//`define __TESTMODE__
+
 ////////////////////////////////////////////////////////////////////////////////
 // darkriscv configuration
 ////////////////////////////////////////////////////////////////////////////////
@@ -47,7 +53,7 @@
 // stage in the pipeline, but keep a good performance most of time
 // (instruction per clock = 1).  of course, read operations require 1
 // wait-state, which means sometimes the read performance is reduced.
-//`define __3STAGE__
+`define __3STAGE__
 
 // RV32I vs RV32E:
 //
@@ -55,6 +61,14 @@
 // minimal in typical applications with modern 5 or 6 input LUT based FPGAs,
 // but the RV32E is better with old 4 input LUT based FPGAs.
 `define __RV32E__
+
+// BIG-ENDIAN:
+//
+// Although the core itself is bi-endian, the SoC, peripherals and firmware
+// needs to be in sync in order to work correctly, so it is possible 
+// enable or disable the big-endian mode, which is usefull for network
+// processing and other communication related stuff.
+`define __BIG__
 
 // muti-threading support:
 //
@@ -68,13 +82,13 @@
 // a) threading is currently supported only in the 3-stage pipeline version.
 // b) the old experimental "interrupt mode" was removed, which means that
 //    the multi-thread mode does not make anything "visible" other than
-//    increment the gpio register.
+//    increment the oport register.
 // c) the threading in the non-interrupt mode switches when the program flow
 //    changes, i.e. every jal instruction. When the core is idle, it is
 //    probably in a jal loop.
 // The number of threads must be 2**n (i.e. THREADS = 3 means 8 threads)
 //`define __THREADS__ 3
-//
+
 // mac instruction:
 //
 // The mac instruction is similar to other register to register
@@ -85,18 +99,6 @@
 // designed for DSP applications.  with some effort (low level machine
 // code), it is possible peak 100MMAC/s @100MHz.
 //`define __MAC16X16__
-
-// flexbuzz interface (experimental):
-//
-// A new data bus interface similar to a well known c*ldfire bus interface, in
-// a way that part of the bus routing is moved to the core, in a way that
-// is possible support different bus widths (8, 16 or 32 bit) and endians more
-// easily (the new interface is natively big-endian, but the endian can be adjusted
-// in the bus interface dinamically). Similarly to the standard 32-bit interface,
-// the external logic must detect the RD/WR operation quick enough and assert HLT
-// in order to insert wait-states and perform the required multiplexing to fit
-// the DLEN operand size in the data bus width available.
-//`define __FLEXBUZZ__
 
 // interrupt support
 //
@@ -113,6 +115,43 @@
 // much sense use it with the 2-stage pipeline).
 //`define __INTERRUPT__
 
+// ebreak support
+// 
+// ebreak enable live debug w/ gdb, with break points, single-step, etc...
+// it basically consists in a single instruction that replace the normal
+// instruction, so an exception will be triggered, which is like an interrupt,
+// but with no real interrupt source.
+//`define __EBREAK__
+
+// CSR support
+// 
+// enable this to use CSR registers...  INTERRUPT and EBREAK use this in
+// order to read some special exception registers.  Also, THREADS use this in
+// order to identify the core number.  
+//`define __CSR__
+//`define __CSR_ESSENTIAL__
+
+// instruction trace:
+//
+// prints the PC, the respective instruction and some useful information,
+// skipping halt and flush, in order to track the instruction execution
+// sequence.  traces are very useful to debug, since is possible dump the
+// traces from a working core in order to debug a non-working core.  when
+// trace is enabled, the UART print is blocked, also, the trace does not
+// dump data when the core is in reset.
+// the trace file is stored on "sim/darksocv.txt"
+//`define __TRACE__
+//`define __TRACEFULL__
+
+// performance measurement:
+//
+// The performance measurement can be done in the simulation level by
+// eabling the __PERFMETER__ define, in order to check how the clock cycles
+// are used in the core. The report is displayed when the FINISH_REQ signal
+// is actived by the UART.
+// the performance counters does not count when the core is in reset.
+`define __PERFMETER__
+
 // initial PC
 //
 // Typically, the PC is set [by HW] to address 0, representing the start of
@@ -127,6 +166,29 @@
 // darksocv configuration:
 ////////////////////////////////////////////////////////////////////////////////
 
+// harvard architecture
+// 
+// darkriscv core is *always* harvard, but it possible multiplex the instr. 
+// and data buses over the time on the SoC level, in a way that it mimics a 
+// classic von neumann architecture, which is useful for single-port memory, 
+// such as SDRAMs, PSRAM, etc. when multiplexed, the instruction fetch turns
+// to be very slow, so caches are essential with this scenario!
+`define __HARVARD__
+
+// cache depth
+// 
+// when enabled, the caches will try map and store the read operations, in a 
+// way that future read operations in the same address will be faster! it is
+// specially applicable to non-harvard SoC configuration, since that the
+// harvard SoC configuration is faster than the cache!
+// the cache depth N means that the each cache will be 32-bit x 2^N
+`ifndef __HARVARD__
+    `define __LUTCACHE__
+    `define __CDEPTH__ 6
+    `define __ICACHE__
+    `define __DCACHE__
+`endif
+
 // interactive simulation:
 //
 // When enabled, will trick the simulator in order to enable interactive
@@ -134,14 +196,6 @@
 // which will make your simulator crazy! unfortunately, it works only with
 // iverilog... at least, Xilinx ISIM does not liket the $fgetc()
 //`define __INTERACTIVE__
-
-// performance measurement:
-//
-// The performance measurement can be done in the simulation level by
-// eabling the __PERFMETER__ define, in order to check how the clock cycles
-// are used in the core. The report is displayed when the FINISH_REQ signal
-// is actived by the UART.
-`define __PERFMETER__
 
 // icarus register debug:
 //
@@ -151,38 +205,17 @@
 // makes no effect in other simulators, but it appears as a warning.
 //`define __REGDUMP__
 
-// full harvard architecture:
-//
-// When defined, enforses that the instruction and data buses are connected
-// to fully separate memory banks.  Although the darkriscv always use
-// harvard architecture in the core, with separate instruction and data
-// buses, the logic levels outside the core can use different architectures
-// and concepts, including von neumann, wich a single bus shared by
-// instruction and data access, as well a mix between harvard and von
-// neumann, which is possible in the case of dual-port blockrams, where is
-// possible connect two separate buses in a single memory bank.  the main
-// advantage of a single memory bank is that the .text and .data areas can
-// be better allocated, but in this case is not possible protect the .text
-// area as in the case of separate memory banks.
-// WARNING: this setup must match with the src/darksocv.ld.src file!
-//`define __HARVARD__
-
 // memory size:
 //
 // The current test firmware requires 8KB of memory, but it depends of the
 // memory layout: whenthe I-bus and D-bus are both attached in the same BRAM,
-// it is possible assume that 8MB is enough, but when the I-bus and D-bus are
+// it is possible assume that 8kB is enough, but when the I-bus and D-bus are
 // attached to separate memories, the I-BRAM requires around 5KB and the
 // D-BRAM requires about 1.5KB. A safe solution is just simply and set the
 // size as the same.
 // The size is defined as 2**MLEN, i.e. the address bits used in the memory.
 // WARNING: this setup must match with the src/darksocv.ld.src file!
-`ifdef __HARVARD__
-    `define MLEN 13 // MEM[12:0] ->  8KBytes LENGTH = 0x2000
-`else
-    `define MLEN 12 // MEM[12:0] -> 4KBytes LENGTH = 0x1000
-    //`define MLEN 15 // MEM[12:0] -> 32KBytes LENGTH = 0x8000 for coremark!
-`endif
+`define MLEN 13 // MEM[14:0] -> 32KBytes LENGTH = 0x8000 for coremark!
 
 // read-modify-write cycle:
 //
@@ -194,6 +227,12 @@
 // pipeline eficiency) due to memory wait-states.
 //`define __RMW_CYCLE__
 
+// bram wait states
+// 
+// to simulate high latency memories, is possible set the number of wait-states
+// for bram here! case not configured, wait-states defaults to 1.
+//`define __WAITSTATE__ 3
+
 // UART speed is set in bits per second, typically 115200 bps:
 //`define __UARTSPEED__ 115200
 
@@ -201,8 +240,8 @@
 //
 // Optional RX/TX queue for communication oriented applications. The concept
 // foreseen 256 bytes for TX and RX, in a way that frames up to 128 bytes can
-// be easily exchanged via UART.
-//`define __UARTQUEUE__
+// be easily exchanged via UART. the queue size is defined as 2**N:
+//`define __UARTQUEUE__ 8 // not working well, need check...
 
 ////////////////////////////////////////////////////////////////////////////////
 // board definition:
@@ -243,9 +282,9 @@
     `define BOARD_CK_REF 100000000
     `define BOARD_CK_MUL 6
     `ifdef __3STAGE__
-        `define BOARD_CK_DIV 6 // 3-stage, 1-ws, 100MHz
+        `define BOARD_CK_DIV 6 // 3-stage, 1-ws, 9=66MHz 6=100MHz
     `else
-        `define BOARD_CK_DIV 9 // 2-stage, 1-ws, 66MHz
+        `define BOARD_CK_DIV 9 // 2-stage, 1-ws, 9=66MHz 6=100MHz
     `endif
     `define XILINX6CLK 1
 `endif
@@ -390,16 +429,39 @@
     `define __RMW_CYCLE__
 `endif
 
+`ifdef PISSWORDS_CH34X_LX16
+    `define BOARD_ID 0 // 18
+    `ifdef __3STAGE__
+        `define BOARD_CK_REF 50000000
+        `define BOARD_CK_MUL 2
+        `define BOARD_CK_DIV 2
+        `define XILINX6CLK 1
+    `else
+        `define BOARD_CK 50000000
+    `endif
+    `define INVRES 1    
+    `define __SDRAM__ 1
+    `define __LUTCACHE__
+    `define __CDEPTH__ 6
+    `define __ICACHE__
+    `define __DCACHE__
+    `undef __HARVARD__
+`endif
 
-// to port to a new board, use TESTMODE to test:
-// - the reset button is working
-// - the LED is blinking at 1Hz
-// - the UART is looped
-//`define TESTMODE
+`ifdef MAX1000_MAX10
+    `define BOARD_ID 19
+    `define BOARD_CK 32000000
+`endif
+
+`ifdef DE10NANO_CYCLONEV_MISTER
+    `define BOARD_ID 20
+    `define BOARD_CK 50000000
+`endif
 
 `ifndef BOARD_ID
     `define BOARD_ID 0
     `define BOARD_CK 100000000
+    //`define __SDRAM__ 1
 `endif
 
 `ifdef BOARD_CK_REF
@@ -417,17 +479,26 @@
 // register number depends of CPU type RV32[EI] and number of threads
 
 `ifdef __THREADS__
-    `undef __INTERRUPT__
 
     `ifdef __RV32E__
         `define RLEN 16*(2**`__THREADS__)
     `else
         `define RLEN 32*(2**`__THREADS__)
     `endif
+    
+    `define __CSR__ 
 `else
     `ifdef __RV32E__
         `define RLEN 16
     `else
         `define RLEN 32
     `endif
+`endif
+
+`ifdef __INTERRUPT__
+    `define __CSR__
+`endif
+
+`ifdef __EBREAK__
+    `define __CSR__
 `endif

@@ -90,7 +90,8 @@ module darkuart
     output          TXD,            // UART xmit line
 
 `ifdef SIMULATION
-    output reg	    FINISH_REQ = 0,
+    output reg	    ESIMREQ = 0,
+    input           ESIMACK,
 `endif
     
     output [3:0]    DEBUG           // osc debug
@@ -101,10 +102,10 @@ module darkuart
     reg         UART_IACK  = 0;     // UART interrupt ack
 
 `ifdef __UARTQUEUE__
-    reg [ 7:0]  UART_XFIFO [0:255]; // UART TX FIFO
-    wire [7:0]  UART_XTMP;          // UART TX FIFO
-    reg [ 8:0]  UART_XREQ  = 0;     // xmit request (core side)
-    reg [ 8:0]  UART_XACK  = 0;     // xmit ack (uart side)
+    reg [ 7:0]  UART_XFIFO [0:2**`__UARTQUEUE__-1]; // UART TX FIFO
+    wire[ 7:0]  UART_XTMP;          // UART TX FIFO
+    reg [ `__UARTQUEUE__:0]  UART_XREQ  = 0;     // xmit request (core side)
+    reg [ `__UARTQUEUE__:0]  UART_XACK  = 0;     // xmit ack (uart side)
 `else
     reg [ 7:0]  UART_XFIFO = 0;     // UART TX FIFO
     reg         UART_XREQ  = 0;     // xmit request (core side)
@@ -114,10 +115,10 @@ module darkuart
     reg [ 3:0]  UART_XSTATE= 0;     // idle state
 
 `ifdef __UARTQUEUE__
-    reg [ 7:0]  UART_RFIFO [0:255]; // UART RX FIFO
+    reg [ 7:0]  UART_RFIFO [0:2**`__UARTQUEUE__-1]; // UART RX FIFO
     reg [ 7:0]  UART_RTMP  = 0;     // UART RX FIFO
-    reg [ 8:0]  UART_RREQ  = 0;     // request (uart side)
-    reg [ 8:0]  UART_RACK  = 0;     // ack (core side)
+    reg [`__UARTQUEUE__:0]  UART_RREQ  = 0;     // request (uart side)
+    reg [`__UARTQUEUE__:0]  UART_RACK  = 0;     // ack (core side)
 `else
     reg [ 7:0]  UART_RFIFO = 0;     // UART RX FIFO
     reg         UART_RREQ  = 0;     // request (uart side)
@@ -129,7 +130,7 @@ module darkuart
     reg [2:0]   UART_RXDFF = -1;
 
 `ifdef __UARTQUEUE__
-    wire [7:0]  UART_STATE = { 6'd0, UART_RREQ!=UART_RACK, UART_XREQ==(UART_XACK^9'h100) };
+    wire [7:0]  UART_STATE = { 6'd0, UART_RREQ!=UART_RACK, UART_XREQ==(UART_XACK^(1<<`__UARTQUEUE__)) };
 
     integer i;
     
@@ -151,20 +152,26 @@ module darkuart
     reg [1:0] IOREQ = 0;
     reg [1:0] IOACK = 0;
 
+    reg [7:0] LASTCHAR=0;
+
     always@(posedge CLK)
     begin
         if(WR)
         begin
             if(BE[1])
             begin
-
+                LASTCHAR <= DATAI[15:8];
+                
 `ifdef SIMULATION
                 // print the UART output to console! :)
                 if(DATAI[15:8]!=13) // remove the '\r'
                 begin
-                    UART_XFIFO <= DATAI[15:8];
+                `ifndef __TRACE__
                     $write("%c",DATAI[15:8]);
-                    $fflush();
+                    `ifndef __INTERACTIVE__
+                        $fflush();
+                    `endif
+                `endif
                     
                     if(IOREQ==1&&DATAI[15:8]==" ")
                     begin
@@ -186,15 +193,15 @@ module darkuart
                 
     `ifndef __INTERACTIVE__
                     $display(" the __INTERACTIVE__ option is disabled, ending simulation...");
-                    FINISH_REQ <= 1;
+                    ESIMREQ <= 1;
     `endif                    
                     if(IOACK==0) IOREQ <= 1;
                 end
 `else
     `ifdef __UARTQUEUE__
-                if(UART_XREQ!=(UART_XACK^9'h100))
+                if(UART_XREQ!=(UART_XACK^(1<<`__UARTQUEUE__)))
                 begin
-                    UART_XFIFO[UART_XREQ[7:0]] <= DATAI[15:8];
+                    UART_XFIFO[UART_XREQ[`__UARTQUEUE__-1:0]] <= DATAI[15:8];
                     UART_XREQ <= UART_XREQ+1;
                 end
     `else            
@@ -226,7 +233,7 @@ module darkuart
     
     assign IRQ   = |(UART_STATE^UART_STATEFF);
 `ifdef __UARTQUEUE__
-    assign DATAO = { UART_TIMER, UART_RFIFO[UART_RACK[7:0]], UART_STATE };
+    assign DATAO = { UART_TIMER, UART_RFIFO[UART_RACK[`__UARTQUEUE__-1:0]], UART_STATE };
 `else
     assign DATAO = { UART_TIMER, UART_RFIFO, UART_STATE };
 `endif
@@ -249,7 +256,7 @@ module darkuart
     end
 
 `ifdef __UARTQUEUE__
-    assign UART_XTMP = UART_XFIFO[UART_XACK[7:0]];
+    assign UART_XTMP = UART_XFIFO[UART_XACK[`__UARTQUEUE__-1:0]];
     
     assign TXD = UART_XSTATE[3] ? UART_XTMP[UART_XSTATE[2:0]] : UART_XSTATE==`UART_STATE_START ? 0 : 1;
 `else
@@ -270,10 +277,10 @@ module darkuart
                                                             UART_RSTATE+(UART_RBAUD==0);
                                                             
 `ifdef __UARTQUEUE__
-        if(UART_RSTATE==`UART_STATE_ACK&&(UART_RREQ!=(UART_RACK^9'h100)))
+        if(UART_RSTATE==`UART_STATE_ACK&&(UART_RREQ!=(UART_RACK^(1<<`__UARTQUEUE__))))
         begin
             UART_RREQ <= UART_RREQ+1;
-            UART_RFIFO[UART_RREQ[7:0]] <= UART_RTMP;
+            UART_RFIFO[UART_RREQ[`__UARTQUEUE__-1:0]] <= UART_RTMP;
         end
 `else
         UART_RREQ <= (IOACK==2 || UART_RSTATE==`UART_STATE_ACK) ? !UART_RACK : UART_RREQ;
@@ -290,7 +297,11 @@ module darkuart
         else
         if(IOACK==1)
         begin
+        `ifdef __UARTQUEUE__
+            UART_RFIFO[UART_RREQ[`__UARTQUEUE__-1:0]] <= $fgetc(32'h8000_0000);
+        `else
             UART_RFIFO <= $fgetc(32'h8000_0000);
+        `endif
             IOACK <= 2;
         end
         else
@@ -301,13 +312,19 @@ module darkuart
         else
         if(IOACK==3)
         begin
-            IOACK <= UART_RREQ^UART_RACK ? 3 : (UART_RFIFO=="\n" ? 0 : 1);
+        `ifdef __UARTQUEUE__        
+            IOACK <= UART_RREQ^UART_RACK ? 3 : (UART_RFIFO[UART_RREQ[`__UARTQUEUE__-1:0]]==10 ? 0 : 1);
+        `else
+            IOACK <= UART_RREQ^UART_RACK ? 3 : (UART_RFIFO==10 ? 0 : 1);
+        `endif
         end
         else
         if(IOREQ==2)
         begin
             IOACK <= 1;
         end
+        
+        if(ESIMACK) $finish();
 `endif        
     end
 

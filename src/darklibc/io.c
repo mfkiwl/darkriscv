@@ -29,10 +29,12 @@
  */
 
 #include <io.h>
+#include <stdio.h>
+#include <time.h>
 
 #ifdef __RISCV__
 
-volatile struct DARKIO io;
+volatile struct DARKIO *io = (volatile struct DARKIO *)0x40000000;
 
 #else
 
@@ -41,8 +43,10 @@ volatile struct DARKIO io =
     4, 100, 0, 0,   // ctrl = { board id, fMHz, fkHz }
     { 0, 0, 0 },    // uart = { stat, fifo, baud }
     0,              // led
-    0,              // gpio
-    1000000         // timer
+    1000000,        // timer
+    0,              // timerus
+    0,              // iport
+    0               // oport
 };
 
 unsigned char kmem[8192] = "darksocv x86 payload test";
@@ -73,6 +77,9 @@ char *board_name(int id)
            id==15 ? "lattice ecp5-25F colorlighti5" :
            id==16 ? "lattice ecp5-85F ulx3s" :
            id==17 ? "qmtech cyclone 10lp c016" :
+           id==18 ? "piswords ch34x lx16" :
+           id==19 ? "max1000 max10" :
+           id==20 ? "de10nano cyclonev mister" :
                     "unknown";
 }
 
@@ -81,17 +88,35 @@ char *board_name(int id)
 __attribute__ ((interrupt ("machine")))
 void irq_handler(void)
 {
-    if(io.irq == IRQ_TIMR)
+    if(io->irq == IRQ_TIMR)
     {
         if(!utimers--)
         {
-            io.led++;
-            utimers=999999;
+            io->led++;
+            utimers=99;
         }
-        io.irq = IRQ_TIMR;
+        io->irq = IRQ_TIMR;
     }
+}
 
-    return;
+__attribute__ ((interrupt ("supervisor")))
+void dbg_handler(void)
+{
+    unsigned cause = get_scause();
+    
+    printf("debug: *** exception at %x w/ mcause=%x/[%s] ***\n",
+        get_sepc(),cause,
+        cause==0?"instruction address align":
+        cause==1?"instruction data fault":
+        cause==2?"illegal instruction":
+        cause==3?"breakpoint":
+        cause==4?"load address align":
+        cause==5?"load data fault":
+        cause==6?"store address align":
+        cause==7?"store data fault":
+                 "unknown");
+
+    set_sepc(get_sepc()+4);
 }
 
 #endif
@@ -230,17 +255,36 @@ void banner(void)
 
 #endif
 
-// mac extension for darkriscv!
+// time() in seconds
 
-int mac(int acc,short x,short y)
+time_t time(time_t *t)
 {
-#ifdef __RISCV__
-    __asm__(".word 0x00c5850b"); // mac a0,a1,a2
-    // "template"
-    //acc += (x^y);
-#else
-    acc+=x*y;
-#endif
-    return acc;
+    int tt = io->timeus/1000000;
+
+    if(t) *t = tt;
+
+    return tt;
 }
 
+// clock() in microseconds
+
+clock_t clock()
+{
+    return io->timeus;
+}
+
+// get time of day in sec/usec
+
+int gettimeofday(struct timeval *t)
+{
+    unsigned io_timeus = io->timeus;
+
+    if(t)
+    {
+        t->tv_sec  = io_timeus/1000000;
+        t->tv_usec = io_timeus%1000000;
+        return 0;
+    }
+    
+    return -1;
+}

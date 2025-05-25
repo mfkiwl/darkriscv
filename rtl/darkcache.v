@@ -32,326 +32,212 @@
 `include "../rtl/config.vh"
 
 module darkcache
+#(
+    parameter ID = 0
+)
 (
-    // TBD
+    input           CLK,    // clock
+    input           RES,    // reset
+    input           HLT,
+
+    // darkriscv
+
+    input           DAS,    // address valid
+    input           DRD,    // read/write
+    input           DWR,    // read/write
+    input   [2:0]   DLEN,   // data length in bytes
+    input   [31:0]  DADDR,  // address
+    input   [31:0]  DATAI,  // data input
+    output  [31:0]  DATAO,  // data output
+    output          DDACK,  // data ack
+
+    output  [31:0]  DATAP, // pipelined data output
+    output          DDACKP, // pipelined ack  output
     
-    output [3:0] DEBUG      // osciloscope
+    // memory
+    
+    output          XDREQ,    // address valid
+    output          XRD,    // data read
+    output          XWR,    // data write
+    output [3:0]    XBE,    // byte enable
+    output [31:0]   XADDR,  // address
+    output [31:0]   XATAO,  // data output
+    input  [31:0]   XATAI,  // data input
+    input           XDACK,   // data ack
+
+    output  [3:0]   DEBUG   // osciloscope
 );
 
-    // darkriscv bus interface
+    // cache
 
-    wire [31:0] IADDR;
-    wire [31:0] DADDR;
-    wire [31:0] IDATA;
-    wire [31:0] DATAO;
-    wire [31:0] DATAI;
-    wire        WR,RD;
-    wire [3:0]  BE;
+`ifdef __CDEPTH__
 
-`ifdef __FLEXBUZZ__
-    wire [31:0] XATAO;
-    wire [31:0] XATAI;
-    wire [ 2:0] DLEN;
-    wire        RW;
-`endif
+    wire [31:0] CDATO; 
+    
+    reg  [31:`__CDEPTH__+2] CTAG   [0:2**`__CDEPTH__-1];    
+    reg  [31:0]             CDATA  [0:2**`__CDEPTH__-1];
+    reg                     CVAL   [0:2**`__CDEPTH__-1];
+    
+    integer i;
+    
+    initial
+    begin
+`ifdef SIMULATION
+        $display("cache%0d: %0dx32-bits (%0d bytes)",
+            ID,
+            (2**`__CDEPTH__),
+            4*(2**`__CDEPTH__));
+`endif            
+        for(i=0;i!=2**`__CDEPTH__;i=i+1) 
+        begin            
+            CDATA [i] = 0;
+            CTAG  [i] = 0;
+            CVAL  [i] = 0;
+        end
+    end
 
-    wire [31:0] IOMUX [0:4];
+    wire [`__CDEPTH__-1:0]  CINDEX = DADDR[`__CDEPTH__+1:2];
 
-    reg  [15:0] GPIOFF = 0;
-    reg  [15:0] LEDFF  = 0;
+    wire HIT = RES ? 0 : (DRD && CVAL[CINDEX] && CTAG[CINDEX]==DADDR[31:`__CDEPTH__+2]);
+    wire CLR = RES ? 0 : (DWR && CVAL[CINDEX] && CTAG[CINDEX]==DADDR[31:`__CDEPTH__+2]);
 
-    wire HLT;
+    wire DTREQ = RES||HIT ? 0 : (DADDR[31:30]==0||DADDR[31:30]==2) && DRD;
 
-`ifdef __ICACHE__
-
-    // instruction cache
-
-    reg  [55:0] ICACHE [0:63]; // instruction cache
-    reg  [63:0] ITAG = 0;      // instruction cache tag
-
-    wire [5:0]  IPTR    = IADDR[7:2];
-    wire [55:0] ICACHEO = ICACHE[IPTR];
-    wire [31:0] ICACHED = ICACHEO[31: 0]; // data
-    wire [31:8] ICACHEA = ICACHEO[55:32]; // address
-
-    wire IHIT = ITAG[IPTR] && ICACHEA==IADDR[31:8];
-
-    reg  IFFX = 0;
-    reg IFFX2 = 0;
-
-    reg [31:0] ROMFF;
+    reg [31:0] DATAOFF = 0;
 
     always@(posedge CLK)
     begin
-    `ifdef __HARVARD__
-        ROMFF <= ROM[IADDR[`MLEN-1:2]];
-    `else
-        ROMFF <= MEM[IADDR[`MLEN-1:2]];
-    `endif
-        if(IFFX2)
+        if(DTREQ && XDACK)
         begin
-            IFFX2 <= 0;
-            IFFX  <= 0;
+            //$display("cache%0d: miss_on_rd %x:%x\n",ID,DADDR,XATAI);
+            CDATA [CINDEX]  <= XATAI;
+            CTAG  [CINDEX]  <= DADDR[31:`__CDEPTH__+2];
+            CVAL  [CINDEX]  <= 1;
         end
         else
-        if(!IHIT)
+        if(CLR)
         begin
-            ICACHE[IPTR] <= { IADDR[31:8], ROMFF };
-            ITAG[IPTR]    <= IFFX; // cached!
-            IFFX          <= 1;
-            IFFX2         <= IFFX;
-        end
-    end
-
-    assign IDATA = ICACHED;
-
-`else
-
-    reg [31:0] ROMFF;
-
-    wire IHIT = 1;
-
-    reg [31:0] ROMFF2 = 0;
-    reg        HLT2   = 0;
-
-    always@(posedge CLK) // stage #0.5
-    begin
-        if(HLT^HLT2)
-        begin
-            ROMFF2 <= ROMFF;
+            if(DLEN==4)
+            begin
+                //$display("cache%0d: miss_on_wr %x:%x\n",ID,DADDR,DATAI);
+                CDATA [CINDEX]  <= DATAI;
+                CTAG  [CINDEX]  <= DADDR[31:`__CDEPTH__+2];
+                CVAL  [CINDEX]  <= 1;   
+            end
+            else
+            begin
+                //$display("cache%0d: flush_on_wr %x:%x\n",ID,DADDR,DATAI);
+                CVAL  [CINDEX]  <= 0;
+            end
         end
 
-        HLT2 <= HLT;
+        // if(HIT) $display("cache%0d: hit_on_rd %x:%x\n",ID,DADDR,DATAI);
+
+        if(!HLT) DATAOFF <= CDATO;
     end
 
-    assign IDATA = HLT2 ? ROMFF2 : ROMFF;
+    assign CDATO  = HIT ? CDATA[CINDEX] : XATAI;        
+    assign DATAP  = DATAOFF;   
+    
+    assign DDACK = HIT ? 1 : XDACK;
 
-    always@(posedge CLK) // stage #0.5
-    begin
-`ifdef __HARVARD__
-        ROMFF <= ROM[IADDR[`MLEN-1:2]];
-`else
-        ROMFF <= MEM[IADDR[`MLEN-1:2]];
-`endif
-    end
+    // pipelined output
 
-    //assign IDATA = ROM[IADDR[`MLEN-1:2]];
+    reg [31:0] XATAI2  = 0;
+   
+    reg HIT2   = 0;
+    reg XDACK2 = 0;
 
-//    always@(posedge CLK)
-//    begin
-//        // weird bug appears to be related to the "sw ra,12(sp)" instruction.
-//        if(WR&&DADDR[31]==0&&DADDR[12]==0)
-//        begin
-//            ROMBUG <= IADDR;
-//        end
-//    end
-
-//    assign IDATA = ROMFF;
-
-`endif
-
-`ifdef __DCACHE__
-
-    // data cache
-
-    reg  [55:0] DCACHE [0:63]; // data cache
-    reg  [63:0] DTAG = 0;      // data cache tag
-
-    wire [5:0]  DPTR    = DADDR[7:2];
-    wire [55:0] DCACHEO = DCACHE[DPTR];
-    wire [31:0] DCACHED = DCACHEO[31: 0]; // data
-    wire [31:8] DCACHEA = DCACHEO[55:32]; // address
-
-    wire DHIT = RD&&!DADDR[31]/*&&DADDR[`MLEN-1]*/ ? DTAG[DPTR] && DCACHEA==DADDR[31:8] : 1;
-
-    reg   FFX = 0;
-    reg  FFX2 = 0;
-
-    reg [31:0] RAMFF;
-
-    reg        WTAG    = 0;
-    reg [31:0] WCACHEA = 0;
-
-    wire WHIT = WR&&!DADDR[31]/*&&DADDR[`MLEN-1]*/ ? WTAG&&WCACHEA==DADDR : 1;
+    wire [31:0] CDATOP;
 
     always@(posedge CLK)
     begin
-    `ifdef __HARVARD__
-        RAMFF <= RAM[DADDR[`MLEN-1:2]];
-    `else
-        RAMFF <= MEM[DADDR[`MLEN-1:2]];
-    `endif
-
-        if(FFX2)
-        begin
-            FFX2 <= 0;
-            FFX  <= 0;
-            WCACHEA <= 0;
-            WTAG <= 0;
-        end
-        else
-        if(!WHIT)
-        begin
-            //individual byte/word/long selection, thanks to HYF!
-        `ifdef __HARVARD__
-            if(BE[0]) RAM[DADDR[`MLEN-1:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
-            if(BE[1]) RAM[DADDR[`MLEN-1:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
-            if(BE[2]) RAM[DADDR[`MLEN-1:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
-            if(BE[3]) RAM[DADDR[`MLEN-1:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
-        `else
-            if(BE[0]) MEM[DADDR[`MLEN-1:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
-            if(BE[1]) MEM[DADDR[`MLEN-1:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
-            if(BE[2]) MEM[DADDR[`MLEN-1:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
-            if(BE[3]) MEM[DADDR[`MLEN-1:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
-        `endif
-            DCACHE[DPTR][0 * 8 + 7: 0 * 8] <= BE[0] ? DATAO[0 * 8 + 7: 0 * 8] : RAMFF[0 * 8 + 7: 0 * 8];
-            DCACHE[DPTR][1 * 8 + 7: 1 * 8] <= BE[1] ? DATAO[1 * 8 + 7: 1 * 8] : RAMFF[1 * 8 + 7: 1 * 8];
-            DCACHE[DPTR][2 * 8 + 7: 2 * 8] <= BE[2] ? DATAO[2 * 8 + 7: 2 * 8] : RAMFF[2 * 8 + 7: 2 * 8];
-            DCACHE[DPTR][3 * 8 + 7: 3 * 8] <= BE[3] ? DATAO[3 * 8 + 7: 3 * 8] : RAMFF[3 * 8 + 7: 3 * 8];
-
-            DCACHE[DPTR][55:32] <= DADDR[31:8];
-
-            DTAG[DPTR]   <= FFX; // cached!
-            WTAG         <= FFX;
-
-            WCACHEA      <= DADDR;
-
-            FFX          <= 1;
-            FFX2         <= FFX;
-        end
-        else
-        if(!DHIT)
-        begin
-            DCACHE[DPTR] <= { DADDR[31:8], RAMFF };
-            DTAG[DPTR]   <= FFX; // cached!
-            FFX          <= 1;
-            FFX2         <= FFX;
-        end
+        // DATAOFF <= CDATA[CINDEX];
+        XATAI2  <= XATAI;
+        XDACK2  <= XDACK;
+        HIT2    <= HIT;
     end
 
-    assign DATAI = DADDR[31] ? IOMUX[DADDR[4:2]==3'b100 ? 3'b100 : DADDR[3:2]] : DCACHED;
+    assign CDATOP = HIT2 ? DATAOFF       : XATAI2;
+    assign DDACKP = HIT ? 0 : HIT2 ? 1 : XDACK2;
 
 `else
 
-    // no cache!
+    wire [31:0] CDATO = XATAI;
+    wire        HIT   = 0;
 
-    `ifdef __FLEXBUZZ__
+    assign DDACK = XDACK;
 
-    // must work just exactly as the default interface, since we have no
-    // flexbuzz devices available yet (i.e., all devices are 32-bit now)
-
-    assign XATAI = DLEN[0] ? ( DADDR[1:0]==3 ? DATAI[31:24] :
-                               DADDR[1:0]==2 ? DATAI[23:16] :
-                               DADDR[1:0]==1 ? DATAI[15: 8] :
-                                               DATAI[ 7: 0] ):
-                   DLEN[1] ? ( DADDR[1]==1   ? DATAI[31:16] :
-                                               DATAI[15: 0] ):
-                                               DATAI;
-
-    assign DATAO = DLEN[0] ? ( DADDR[1:0]==3 ? {        XATAO[ 7: 0], 24'hx } :
-                               DADDR[1:0]==2 ? {  8'hx, XATAO[ 7: 0], 16'hx } :
-                               DADDR[1:0]==1 ? { 16'hx, XATAO[ 7: 0],  8'hx } :
-                                               { 24'hx, XATAO[ 7: 0]        } ):
-                   DLEN[1] ? ( DADDR[1]==1   ? { XATAO[15: 0], 16'hx } :
-                                               { 16'hx, XATAO[15: 0] } ):
-                                                 XATAO;
-
-    assign RD = DLEN&&RW==1;
-    assign WR = DLEN&&RW==0;
-
-    assign BE =    DLEN[0] ? ( DADDR[1:0]==3 ? 4'b1000 : // 8-bit
-                               DADDR[1:0]==2 ? 4'b0100 :
-                               DADDR[1:0]==1 ? 4'b0010 :
-                                               4'b0001 ) :
-                   DLEN[1] ? ( DADDR[1]==1   ? 4'b1100 : // 16-bit
-                                               4'b0011 ) :
-                                               4'b1111;  // 32-bit
-
-    `endif
-
-    reg [31:0] RAMFF;
-
-    // for single phase clock: 1 wait state in read op always required!
-
-    reg [1:0] DACK = 0;
-
-    wire WHIT = 1;
-    wire DHIT = !((RD
-            `ifdef __RMW_CYCLE__
-                    ||WR		// worst code ever! but it is 3:12am...
-            `endif
-                    ) && DACK!=1); // the WR operatio does not need ws. in this config.
-
-    always@(posedge CLK) // stage #1.0
-    begin
-        DACK <= RES ? 0 : DACK ? DACK-1 : (RD
-            `ifdef __RMW_CYCLE__
-                    ||WR		// 2nd worst code ever!
-            `endif
-                    ) ? 1 : 0; // wait-states
-    end
-
-    always@(posedge CLK) // stage #1.5
-    begin
-`ifdef __HARVARD__
-        RAMFF <= RAM[DADDR[`MLEN-1:2]];
-`else
-        RAMFF <= MEM[DADDR[`MLEN-1:2]];
 `endif
-    end
 
-    //assign DATAI = DADDR[31] ? IOMUX  : RAM[DADDR[`MLEN-1:2]];
+    // convert darkriscv bus to xbus
 
-    reg [31:0] IOMUXFF = 0;
-    reg [31:0] XADDR   = 0;
+`ifdef __BIG__
 
-    //individual byte/word/long selection, thanks to HYF!
+    assign XDREQ = HIT ? 0 : DAS;
+    assign XRD   = HIT ? 0 : DRD;
+    assign XWR   = HIT ? 0 : DWR;
 
-    always@(posedge CLK)
-    begin
+    assign XADDR = HIT ? 0 : DADDR;
 
-`ifdef __RMW_CYCLE__
+    assign XBE   = HIT ? 0 : DLEN[0] ? ( DADDR[1:0]==0 ? 4'b1000 : // 8-bit
+                                         DADDR[1:0]==1 ? 4'b0100 :
+                                         DADDR[1:0]==2 ? 4'b0010 :
+                                                         4'b0001 ) :
+                             DLEN[1] ? ( DADDR[1]==0   ? 4'b1100 : // 16-bit
+                                                         4'b0011 ) :
+                                                         4'b1111;  // 32-bit
+    
+    assign XATAO = HIT ? 0 : DLEN[0] ? ( DADDR[1:0]==0 ? {        DATAI[ 7: 0], 24'd0 } :
+                                         DADDR[1:0]==1 ? {  8'd0, DATAI[ 7: 0], 16'd0 } :
+                                         DADDR[1:0]==2 ? { 16'd0, DATAI[ 7: 0],  8'd0 } :
+                                                         { 24'd0, DATAI[ 7: 0]        } ):
+                             DLEN[1] ? ( DADDR[1]==0   ? { DATAI[15: 0], 16'd0 } :
+                                                         { 16'd0, DATAI[15: 0] } ):
+                                                                  DATAI;
 
-        // read-modify-write operation w/ 1 wait-state:
-
-        if(!HLT&&WR&&DADDR[31]==0/*&&DADDR[`MLEN-1]==1*/)
-        begin
-    `ifdef __HARVARD__
-            RAM[DADDR[`MLEN-1:2]] <=
-    `else
-            MEM[DADDR[`MLEN-1:2]] <=
-    `endif
-                                {
-                                    BE[3] ? DATAO[3 * 8 + 7: 3 * 8] : RAMFF[3 * 8 + 7: 3 * 8],
-                                    BE[2] ? DATAO[2 * 8 + 7: 2 * 8] : RAMFF[2 * 8 + 7: 2 * 8],
-                                    BE[1] ? DATAO[1 * 8 + 7: 1 * 8] : RAMFF[1 * 8 + 7: 1 * 8],
-                                    BE[0] ? DATAO[0 * 8 + 7: 0 * 8] : RAMFF[0 * 8 + 7: 0 * 8]
-                                };
-        end
+    assign DATAO = DLEN[0] ? ( DADDR[1:0]==0 ? CDATO[31:24] :
+                               DADDR[1:0]==1 ? CDATO[23:16] :
+                               DADDR[1:0]==2 ? CDATO[15: 8] :
+                                               CDATO[ 7: 0] ):
+                   DLEN[1] ? ( DADDR[1]==0   ? CDATO[31:16] :
+                                               CDATO[15: 0] ):
+                                               CDATO;
 
 `else
-        // write-only operation w/ 0 wait-states:
-    `ifdef __HARVARD__
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[3]) RAM[DADDR[`MLEN-1:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[2]) RAM[DADDR[`MLEN-1:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[1]) RAM[DADDR[`MLEN-1:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[0]) RAM[DADDR[`MLEN-1:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
-    `else
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[3]) MEM[DADDR[`MLEN-1:2]][3 * 8 + 7: 3 * 8] <= DATAO[3 * 8 + 7: 3 * 8];
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[2]) MEM[DADDR[`MLEN-1:2]][2 * 8 + 7: 2 * 8] <= DATAO[2 * 8 + 7: 2 * 8];
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[1]) MEM[DADDR[`MLEN-1:2]][1 * 8 + 7: 1 * 8] <= DATAO[1 * 8 + 7: 1 * 8];
-        if(!HLT&&WR&&DADDR[31]==0&&/*DADDR[`MLEN-1]==1&&*/BE[0]) MEM[DADDR[`MLEN-1:2]][0 * 8 + 7: 0 * 8] <= DATAO[0 * 8 + 7: 0 * 8];
-    `endif
+
+    assign XDREQ = HIT ? 0 : DAS;
+    assign XRD   = HIT ? 0 : DRD;
+    assign XWR   = HIT ? 0 : DWR;
+
+    assign XADDR = HIT ? 0 : DADDR;
+
+    assign XBE   = HIT ? 0 : DLEN[0] ? ( DADDR[1:0]==3 ? 4'b1000 : // 8-bit
+                                         DADDR[1:0]==2 ? 4'b0100 :
+                                         DADDR[1:0]==1 ? 4'b0010 :
+                                                         4'b0001 ) :
+                             DLEN[1] ? ( DADDR[1]==1   ? 4'b1100 : // 16-bit
+                                                         4'b0011 ) :
+                                                         4'b1111;  // 32-bit
+    
+    assign XATAO = HIT ? 0 : DLEN[0] ? ( DADDR[1:0]==3 ? {        DATAI[ 7: 0], 24'd0 } :
+                                         DADDR[1:0]==2 ? {  8'd0, DATAI[ 7: 0], 16'd0 } :
+                                         DADDR[1:0]==1 ? { 16'd0, DATAI[ 7: 0],  8'd0 } :
+                                                         { 24'd0, DATAI[ 7: 0]        } ):
+                             DLEN[1] ? ( DADDR[1]==1   ? { DATAI[15: 0], 16'd0 } :
+                                                         { 16'd0, DATAI[15: 0] } ):
+                                                                  DATAI;
+
+    assign DATAO = DLEN[0] ? ( DADDR[1:0]==3 ? CDATO[31:24] :
+                               DADDR[1:0]==2 ? CDATO[23:16] :
+                               DADDR[1:0]==1 ? CDATO[15: 8] :
+                                               CDATO[ 7: 0] ):
+                   DLEN[1] ? ( DADDR[1]==1   ? CDATO[31:16] :
+                                               CDATO[15: 0] ):
+                                               CDATO;
+
 `endif
 
-        XADDR <= DADDR; // 1 clock delayed
-        IOMUXFF <= IOMUX[DADDR[4:2]==3'b100 ? 3'b100 : DADDR[3:2]]; // read w/ 2 wait-states
-    end
-
-    //assign DATAI = DADDR[31] ? IOMUX[DADDR[3:2]]  : RAMFF;
-    //assign DATAI = DADDR[31] ? IOMUXFF : RAMFF;
-    assign DATAI = XADDR[31] ? IOMUX[XADDR[4:2]==3'b100 ? 3'b100 : XADDR[3:2]] : RAMFF;
-
-`endif
+    assign DEBUG = { DAS, HIT, XDREQ, XDACK };
 
 endmodule
