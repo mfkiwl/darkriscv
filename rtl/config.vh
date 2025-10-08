@@ -60,7 +60,7 @@
 // The difference between the RV32I and RV32E regarding the logic space is
 // minimal in typical applications with modern 5 or 6 input LUT based FPGAs,
 // but the RV32E is better with old 4 input LUT based FPGAs.
-`define __RV32E__
+//`define __RV32E__
 
 // BIG-ENDIAN:
 //
@@ -68,7 +68,7 @@
 // needs to be in sync in order to work correctly, so it is possible 
 // enable or disable the big-endian mode, which is usefull for network
 // processing and other communication related stuff.
-`define __BIG__
+//`define __BIG__
 
 // muti-threading support:
 //
@@ -89,6 +89,18 @@
 // The number of threads must be 2**n (i.e. THREADS = 3 means 8 threads)
 //`define __THREADS__ 3
 
+// coprocessor interface
+//
+// The coprocessor interface allows to add new instructions to
+// the custom-0 opcode without modifying the core itself
+// the CPR_REQ is asserted when the custom opcode is matched
+// the fct3/fct7 are outputted alongside with rs1/rs2/rd current values
+// the RDW is the value written in the next cycle to the target register
+// the user may use HLT to implement multi-cycle accelerators
+//`define __COPROCESSOR__
+
+`ifdef __COPROCESSOR__
+
 // mac instruction:
 //
 // The mac instruction is similar to other register to register
@@ -99,6 +111,40 @@
 // designed for DSP applications.  with some effort (low level machine
 // code), it is possible peak 100MMAC/s @100MHz.
 //`define __MAC16X16__
+
+`endif
+
+// flexbuzz interface (for compatibility):
+//
+// A new data bus interface similar to a well known c*ldfire bus interface,
+// in a way that part of the bus routing is moved to the core, in a way that
+// is possible support different bus widths (8, 16 or 32 bit) and endians
+// more easily (the new interface is natively big-endian, but the endian can
+// be adjusted in the bus interface dinamically).  Similarly to the standard
+// 32-bit interface, the external logic must detect the RD/WR operation
+// quick enough and assert HLT in order to insert wait-states and perform
+// the required multiplexing to fit the DLEN operand size in the data bus
+// width available.  As far as other blocks were added, in special
+// DarkBridge, DarkRAM and DarkCache, such bus proved not so good, since we
+// had to duplicate lots of code on that blocks, so we reverted to the
+// previous concept and keep this option only for compatibility.
+//`define __FLEXBUZZ__
+
+// CSR support
+// 
+// enable this to use CSR registers...  INTERRUPT and EBREAK use this in
+// order to read some special exception registers.  Also, THREADS use this in
+// order to identify the core number.  
+//`define __CSR__
+
+`ifdef __CSR__
+
+// Performance Counters
+//
+// The Performance Counters are a set of 64-bit registers that counts the
+//number of clocks and number of instructions executed, so is possible
+//measure the core performance.
+//`define __CSR_ESSENTIAL__
 
 // interrupt support
 //
@@ -123,13 +169,7 @@
 // but with no real interrupt source.
 //`define __EBREAK__
 
-// CSR support
-// 
-// enable this to use CSR registers...  INTERRUPT and EBREAK use this in
-// order to read some special exception registers.  Also, THREADS use this in
-// order to identify the core number.  
-//`define __CSR__
-//`define __CSR_ESSENTIAL__
+`endif
 
 // instruction trace:
 //
@@ -187,6 +227,7 @@
     `define __CDEPTH__ 6
     `define __ICACHE__
     `define __DCACHE__
+    `define __RMW_CYCLE__
 `endif
 
 // interactive simulation:

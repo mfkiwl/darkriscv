@@ -70,19 +70,31 @@ module darkbridge
 
     wire [31:0] IADDR;
     wire [31:0] IDATA;
+    wire        IDREQ;
     wire        IDACK;
     
     wire [31:0] DADDR;
     wire [31:0] DATAO;
     wire [31:0] DATAI;
-    wire [ 2:0] DLEN;
+    wire [ 3:0] DBE;
+    
     wire        IHLT,
                 DRW,
                 DWR,
                 DRD,
-                DAS;
+                DDREQ;
     wire        DDACK;
 
+`ifdef __COPROCESSOR__
+    wire        CPR_REQ;
+    wire [ 2:0] CPR_FCT3;
+    wire [ 6:0] CPR_FCT7;
+    wire [31:0] CPR_RS1;
+    wire [31:0] CPR_RS2;
+    wire [31:0] CPR_RDR;
+    wire [31:0] CPR_RDW;
+    wire        CPR_ACK;
+`endif
    
     // darkriscv
 
@@ -96,32 +108,41 @@ module darkbridge
     (
         .CLK    (CLK),
         .RES    (RES),
-        .HLT    (IHLT),
 
 `ifdef __INTERRUPT__
         .IRQ    (XIRQ),
 `endif
 
-`ifdef __BIG__
-        .IDATA  ({IDATA[7:0],IDATA[15:8],IDATA[23:16],IDATA[31:24]}),
-`else
+        .IDREQ  (IDREQ),
         .IDATA  (IDATA),
-`endif
         .IADDR  (IADDR),
-        .DADDR  (DADDR),
+        .IDACK  (IDACK),
 
+        .DADDR  (DADDR),
         .DATAI  (DATAI),
         .DATAO  (DATAO),
-        .DLEN   (DLEN),
+        .DBE    (DBE),
         .DRW    (DRW),
         .DWR    (DWR),
         .DRD    (DRD),
-        .DAS    (DAS),
+        .DDREQ  (DDREQ),
+        .DDACK  (DDACK),
         .BERR   (1'b0),
 
 `ifdef SIMULATION
         .ESIMREQ(ESIMREQ),
         .ESIMACK(ESIMACK),
+`endif
+
+`ifdef __COPROCESSOR__
+        .CPR_REQ    (CPR_REQ),
+        .CPR_FCT3   (CPR_FCT3),
+        .CPR_FCT7   (CPR_FCT7),
+        .CPR_RS1    (CPR_RS1),
+        .CPR_RS2    (CPR_RS2),
+        .CPR_RDR    (CPR_RDR),
+        .CPR_RDW    (CPR_RDW),
+        .CPR_ACK    (CPR_ACK),
 `endif
 
         .DEBUG  (KDEBUG)
@@ -144,10 +165,10 @@ module darkbridge
         .RES    (RES),
         .HLT    (HLT),
         
-        .DAS    (!RES),
+        .DDREQ  (IDREQ),
         .DRD    (1'b1),
         .DWR    (1'b0),
-        .DLEN   (3'd4),
+        .DBE    (4'b1111),
         .DADDR  (IADDR),    
         .DATAI  (32'd0),
         .DATAP  (IDATA),
@@ -165,7 +186,7 @@ module darkbridge
 
 `else
 
-    assign YDREQ = !RES;
+    assign YDREQ = IDREQ;
     assign YADDR = IADDR;
     assign IDATA = YDATA;
     assign IDACK = YDACK;
@@ -196,10 +217,10 @@ module darkbridge
         .RES    (RES),
         .HLT    (HLT),
         
-        .DAS    (DAS),
+        .DDREQ  (DDREQ),
         .DRD    (DRD),
         .DWR    (DWR),
-        .DLEN   (DLEN),
+        .DBE    (DBE),
         .DADDR  (DADDR),    
         .DATAI  (DATAO),
         .DATAO  (DATAI),
@@ -217,65 +238,14 @@ module darkbridge
 
 `else
 
-    assign XDREQ = DAS;
+    assign XDREQ = DDREQ;
     assign XRD   = DRD;
     assign XWR   = DWR;
+    assign XBE   = DBE;
 
     assign XADDR = DADDR;
-
-    `ifdef __BIG__
-
-    assign XBE   = DLEN[0] ? ( DADDR[1:0]==0 ? 4'b1000 : // 8-bit
-                               DADDR[1:0]==1 ? 4'b0100 :
-                               DADDR[1:0]==2 ? 4'b0010 :
-                                               4'b0001 ) :
-                   DLEN[1] ? ( DADDR[1]==0   ? 4'b1100 : // 16-bit
-                                               4'b0011 ) :
-                                               4'b1111;  // 32-bit
-
-    assign XATAO = DLEN[0] ? ( DADDR[1:0]==0 ? {        DATAO[ 7: 0], 24'd0 } :
-                               DADDR[1:0]==1 ? {  8'd0, DATAO[ 7: 0], 16'd0 } :
-                               DADDR[1:0]==2 ? { 16'd0, DATAO[ 7: 0],  8'd0 } :
-                                               { 24'd0, DATAO[ 7: 0]        } ):
-                   DLEN[1] ? ( DADDR[1]==0   ? { DATAO[15: 0], 16'd0 } :
-                                               { 16'd0, DATAO[15: 0] } ):
-                                                        DATAO;
-
-    assign DATAI = DLEN[0] ? ( DADDR[1:0]==0 ? XATAI[31:24] :
-                               DADDR[1:0]==1 ? XATAI[23:16] :
-                               DADDR[1:0]==2 ? XATAI[15: 8] :
-                                               XATAI[ 7: 0] ):
-                   DLEN[1] ? ( DADDR[1]==0   ? XATAI[31:16] :
-                                               XATAI[15: 0] ):
-                                               XATAI;
-
-    `else
-
-    assign XBE   = DLEN[0] ? ( DADDR[1:0]==3 ? 4'b1000 : // 8-bit
-                               DADDR[1:0]==2 ? 4'b0100 :
-                               DADDR[1:0]==1 ? 4'b0010 :
-                                               4'b0001 ) :
-                   DLEN[1] ? ( DADDR[1]==1   ? 4'b1100 : // 16-bit
-                                               4'b0011 ) :
-                                               4'b1111;  // 32-bit
-    
-    assign XATAO = DLEN[0] ? ( DADDR[1:0]==3 ? {        DATAO[ 7: 0], 24'd0 } :
-                               DADDR[1:0]==2 ? {  8'd0, DATAO[ 7: 0], 16'd0 } :
-                               DADDR[1:0]==1 ? { 16'd0, DATAO[ 7: 0],  8'd0 } :
-                                               { 24'd0, DATAO[ 7: 0]        } ):
-                   DLEN[1] ? ( DADDR[1]==1   ? { DATAO[15: 0], 16'd0 } :
-                                               { 16'd0, DATAO[15: 0] } ):
-                                                        DATAO;
-
-    assign DATAI = DLEN[0] ? ( DADDR[1:0]==3 ? XATAI[31:24] :
-                               DADDR[1:0]==2 ? XATAI[23:16] :
-                               DADDR[1:0]==1 ? XATAI[15: 8] :
-                                               XATAI[ 7: 0] ):
-                   DLEN[1] ? ( DADDR[1]==1   ? XATAI[31:16] :
-                                               XATAI[15: 0] ):
-                                               XATAI;
-
-    `endif
+    assign XATAO = DATAO;
+    assign DATAI = XATAI;
 
     assign DDACK = XXDACK;
 
@@ -293,7 +263,7 @@ module darkbridge
     assign XATAI  = XXATAI;
     assign XDACK  = XXDACK;
 
-    assign IHLT = (!RES && !IDACK) || (DAS && !DDACK);
+    assign IHLT = (IDREQ && !IDACK) || (DDREQ && !DDACK);
     
     assign HLT  = IHLT; 
 
@@ -331,12 +301,46 @@ module darkbridge
     assign XATAI = XSTATE==1 ? XATAI2 : XXATAI;
     assign XDACK = XSTATE==1 ? XDACK2 : XXDACK;
 
-    assign IHLT = (!RES && !IDACK) || (DAS && !DDACK);
+    assign IHLT = (IDREQ && !IDACK) || (DDREQ && !DDACK);
     
     assign HLT  = 0;
 
 `endif
-    
+
+`ifdef __COPROCESSOR__
+
+    // Coprocessors are linked here!  Althrough there are no rules about it
+    // at this time, one suggestion is use FCT3 as coprocessor ID, in the
+    // same way the 680x0 used, so it is possible keep up to 8 independent
+    // coprocessors, with the same tipe or not.  That makes much sense in
+    // the case of stateless coprocessors, but it would make full sense in
+    // the case of statefull coprocessors with integrated registers and
+    // multi-cycle processing, in a way that is possible run complex jobs in
+    // paralell.
+
+    `ifdef __MAC16X16__
+
+        darkmac mac0
+        (
+            .CLK        (CLK),          // clock
+            .RES        (RES),          // reset
+            .HLT        (HLT),          // halt
+
+            .CPR_REQ    (CPR_REQ),      // CPR instr request
+            .CPR_FCT3   (CPR_FCT3),     // fct3 field
+            .CPR_FCT7   (CPR_FCT7),     // fct7 field
+            .CPR_RS1    (CPR_RS1),      // operand RS1
+            .CPR_RS2    (CPR_RS2),      // operand RS2
+            .CPR_RDR    (CPR_RDR),      // operand RD (read)
+            .CPR_RDW    (CPR_RDW),      // operand RD (write)
+            .CPR_ACK    (CPR_ACK)       // CPR instr ack
+            //.DEBUG      (DEBUG)       // old-school osciloscope based debug! :)
+        );
+
+    `endif
+
+`endif
+
     assign DEBUG = { XDREQ, HLT, XDACK, IDACK };
 
 endmodule
